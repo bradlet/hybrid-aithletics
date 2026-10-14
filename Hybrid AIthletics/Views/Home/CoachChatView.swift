@@ -109,7 +109,7 @@ struct CoachChatView: View {
     // MARK: - Subviews
 
     /// Download / load progress. Copy carried over from the retired sheet,
-    /// where it was already tuned for the ~2 GB first-run download.
+    /// where it was already tuned for the ~4 GB first-run download.
     private func modelLoadingCard(fraction: Double?) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
@@ -120,11 +120,11 @@ struct CoachChatView: View {
             }
             if let fraction {
                 ProgressView(value: fraction).tint(.accentColor)
-                Text("\(Int(fraction * 100))% — ~2 GB download, this only happens once.")
+                Text("\(Int(fraction * 100))% — ~4 GB download, this only happens once.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             } else if !coach.isModelCached {
-                Text("~2 GB download — this only happens once.")
+                Text("~4 GB download — this only happens once.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }

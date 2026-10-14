@@ -21,11 +21,11 @@ We don't withhold any features from the free app. Upgrade one time only to suppo
 - **Exercise types**: Run, Long Run, Tempo Run, Interval Run, Easy Run, Recovery Run, Walk, Bike, Swim, Hike, Elliptical, Other
 
 ### AI Coach
-- **On-device running coach** powered by Google's Gemma 3 4B running locally via [MLX-Swift](https://github.com/ml-explore/mlx-swift-examples)
+- **On-device running coach** powered by Google's Gemma 4 E2B running locally via [MLX-Swift](https://github.com/ml-explore/mlx-swift-examples)
 - Reviews the last four weeks of recorded workouts — including two optional radial-dial ratings, **"How did it feel?" (1–5, Very Weak → Very Strong)** and **"How hard was it?" (RPE 1–10)** — and the next two weeks of scheduled exercises
 - Suggests concrete adaptations: workout type, duration, distance, intensity, additions, or removals
 - **Fully offline** after initial model download, no API calls, no subscription — aligned with the one-time-payment business model
-- Model weights (~2 GB) are downloaded from Hugging Face on first use and cached locally for offline access
+- Model weights (~4.3 GB) are downloaded from Hugging Face on first use and cached locally for offline access
 
 ### Strength Training (Tab 2)
 - Placeholder — weekly strength training calendar coming in a future release
@@ -44,7 +44,7 @@ We don't withhold any features from the free app. Upgrade one time only to suppo
 | UI | SwiftUI |
 | Data | SwiftData |
 | Sync | CloudKit (automatic via SwiftData) |
-| On-device LLM | MLX-Swift + Gemma 3 4B QAT (4-bit, Apache 2.0, downloaded on first use) |
+| On-device LLM | MLX-Swift + Gemma 4 E2B (4-bit, downloaded on first use) |
 | Testing | Swift Testing framework |
 | Min iOS | 17.0 |
 
@@ -56,7 +56,7 @@ Hybrid AIthletics/
   Config/           ModelContainer factory, environment keys (units, aiCoach)
   Extensions/       Date arithmetic, distance formatting
   Services/
-    AICoach/        Protocol-based on-device coach (MLX + Gemma 3 4B)
+    AICoach/        Protocol-based on-device coach (MLX + Gemma 4 E2B)
   Views/
     AerobicTraining/  Weekly calendar, exercise cards, add/record sheets, AI coach sheet
     Strength/         Placeholder view
@@ -73,7 +73,7 @@ Open `Hybrid AIthletics.xcodeproj` in Xcode 15+ and build for an iOS 17+ simulat
 
 ### AI Coach Model
 
-The AI coach model (~2 GB, Gemma 3 4B QAT 4-bit) downloads automatically from Hugging Face on first use and is cached locally for offline access. No manual setup is required — the MLXLLM framework handles downloading and caching transparently.
+The AI coach model (~4.3 GB, Gemma 4 E2B 4-bit) downloads automatically from Hugging Face on first use and is cached locally for offline access. No manual setup is required — the MLXLLM framework handles downloading and caching transparently.
 
 > **Note:** The app compiles, runs, and passes all tests without any model present. All unit tests use `StubAICoachService`.
 

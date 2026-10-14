@@ -2,7 +2,7 @@
 //  MLXAICoachService.swift
 //  Hybrid AIthletics
 //
-//  Production AI coach backed by Gemma 3 4B running on-device via MLX-Swift.
+//  Production AI coach backed by Gemma 4 E2B running on-device via MLX-Swift.
 //
 //  The model is downloaded from Hugging Face on first use and cached locally
 //  for offline access. The real implementation compiles when the `MLXLLM`
@@ -22,7 +22,7 @@ import MLXLLM
 import MLXLMCommon
 #endif
 
-/// Coaching service backed by Gemma 3 4B downloaded from Hugging Face and run
+/// Coaching service backed by Gemma 4 E2B downloaded from Hugging Face and run
 /// on-device via MLX-Swift.
 ///
 /// The model is downloaded lazily on the first call and cached in the app's
@@ -32,7 +32,24 @@ import MLXLMCommon
 final class MLXAICoachService: AICoachService, @unchecked Sendable {
 
     /// Hugging Face model ID — downloaded on first use, cached locally.
-    static let modelID = "mlx-community/gemma-3-4b-it-qat-4bit"
+    ///
+    /// Gemma 4 E2B, 4-bit. The `gemma4` model type is multimodal; MLXLLM's
+    /// `Gemma4Model` reads the nested `text_config` and drops the
+    /// `vision_tower` / `multi_modal_projector` weights, so it loads text-only.
+    ///
+    /// Why this repo and not `mlx-community/gemma-4-E2B-it-qat-mobile`, which is
+    /// smaller (2.40 GB): that one is Google QAT (`quant_method: "gemma"`), not
+    /// an MLX conversion. It has no `.scales`/`.biases` tensors, its
+    /// `quantization_config` is regex-keyed with `num_bits` of 2/4/8, and it
+    /// declares no `group_size` at all — so mlx-swift-lm cannot load it, and the
+    /// missing group size is not recoverable. Every other published Gemma 4 MLX
+    /// build is 5.4 GB or larger.
+    ///
+    /// At 4.34 GB this is appreciably heavier than the Gemma 3 4B QAT build it
+    /// replaced (3.00 GB); watch for jetsam on non-Pro devices. This repo also
+    /// ships no `tokenizer_config.json`, so tokenizer metadata comes from
+    /// `chat_template.jinja` via swift-transformers' fallback.
+    static let modelID = "lmstudio-community/gemma-4-E2B-it-MLX-4bit"
 
     // MARK: - Generation parameters
     //
@@ -50,12 +67,15 @@ final class MLXAICoachService: AICoachService, @unchecked Sendable {
 
     #if canImport(MLXLLM)
     // `toolCallFormat` is what lets the runtime's GemmaFunctionParser recognize
-    // this model's `call:name{...}` tool-call syntax. Switching to a Gemma 4
-    // checkpoint means switching this to `.gemma4`.
+    // the model's tool-call syntax. Gemma 4 uses `<|tool_call>` / `<tool_call|>`
+    // with a `<|"|>` escape marker, where Gemma 3 used `<start_function_call>`.
+    //
+    // Gemma 4's end-of-turn token is `<turn|>` (its `eot_token`), not Gemma 3's
+    // `<end_of_turn>`.
     private let configuration = ModelConfiguration(
         id: MLXAICoachService.modelID,
-        extraEOSTokens: ["<end_of_turn>"],
-        toolCallFormat: .gemma
+        extraEOSTokens: ["<turn|>"],
+        toolCallFormat: .gemma4
     )
 
     /// Cached model container — populated by `loadModel()` or lazily on first

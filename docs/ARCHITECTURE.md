@@ -89,7 +89,7 @@ The on-device coaching feature lives behind a protocol, `AICoachService`, so the
 
 **Implementations.**
 - `StubAICoachService` — returns a deterministic canned response and streams it in small chunks with artificial delay. Used by previews and tests.
-- `MLXAICoachService` — production implementation backed by Gemma 3 4B via MLX-Swift. The model is downloaded from Hugging Face on first use and cached locally. The actual MLX calls are gated behind `#if canImport(MLXLLM)` so the file compiles even before the SPM dependency is added, throwing `AICoachError.notImplemented` until the dependency is in place. Reads generation parameters from `GenerationConfig.production`. Uses `UserInput(chat:)` with separate system/user roles.
+- `MLXAICoachService` — production implementation backed by Gemma 4 E2B via MLX-Swift. The model is downloaded from Hugging Face on first use and cached locally. The actual MLX calls are gated behind `#if canImport(MLXLLM)` so the file compiles even before the SPM dependency is added, throwing `AICoachError.notImplemented` until the dependency is in place. Reads generation parameters from `GenerationConfig.production`. Uses `UserInput(chat:)` with separate system/user roles.
 
 **Prompt construction.** `AICoachPromptBuilder` lives in the `AICoachCore` package and turns a `CoachingRequest` into prompt text. It provides both `buildPrompt(for:)` (flat string) and `buildUserContent(for:)` (user content only, for use alongside `systemPreamble`). Note: Gemma 3's chat template folds system messages into the first user turn regardless, so both approaches produce identical tokenized prompts.
 
@@ -104,7 +104,7 @@ The `Evals/` directory contains tools for iterating on the AI coach's prompt and
 See `Evals/README.md` for full documentation.
 
 ### Model delivery
-The Gemma 3 4B QAT 4-bit model is **not bundled** in the app binary. Instead, `MLXAICoachService` uses `ModelConfiguration(id: "mlx-community/gemma-3-4b-it-qat-4bit")` to download the weights from Hugging Face on first use (~2 GB). MLXLLM caches the download in the app's caches directory for offline access on subsequent launches. This keeps the app binary small and eliminates the need for developers to manually download and configure model weights.
+The Gemma 4 E2B 4-bit model is **not bundled** in the app binary. Instead, `MLXAICoachService` uses `ModelConfiguration(id: "lmstudio-community/gemma-4-E2B-it-MLX-4bit")` to download the weights from Hugging Face on first use (~4.3 GB). MLXLLM caches the download in the app's caches directory for offline access on subsequent launches. This keeps the app binary small and eliminates the need for developers to manually download and configure model weights.
 
 ## Data Flow
 

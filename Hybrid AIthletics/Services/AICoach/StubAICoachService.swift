@@ -16,7 +16,7 @@ import AICoachCore
 /// Use this as the default `@Environment(\.aiCoach)` value so previews do
 /// not trigger MLX loading, and in tests that only care about the view
 /// layer's wiring rather than actual model output.
-struct StubAICoachService: AICoachService {
+final class StubAICoachService: AICoachService, @unchecked Sendable {
 
     /// Default canned narrative returned by every call. Composed to read
     /// plausibly even without any real analysis.
@@ -31,8 +31,62 @@ struct StubAICoachService: AICoachService {
 
     let narrative: String
 
-    init(narrative: String = StubAICoachService.defaultNarrative) {
+    /// Whether the stub pretends its weights are already on disk.
+    ///
+    /// `false` lets previews and UI tests exercise the pre-download call to
+    /// action and the progress bar without touching the network.
+    private(set) var isModelCached: Bool
+
+    /// Simulated total download size.
+    let approximateDownloadBytes: Int64
+
+    /// How many progress steps a simulated download reports, and how long it
+    /// pauses between them.
+    private let simulatedSteps: Int
+    private let simulatedStepDelay: Duration
+
+    var onDownloadProgress: (@Sendable (AICoachDownloadProgress) -> Void)?
+
+    private var loaded = false
+
+    /// Whether the model is loaded and ready to generate.
+    var isModelReady: Bool { loaded }
+
+    init(
+        narrative: String = StubAICoachService.defaultNarrative,
+        isModelCached: Bool = true,
+        approximateDownloadBytes: Int64 = 4_372_000_000,
+        simulatedSteps: Int = 10,
+        simulatedStepDelay: Duration = .milliseconds(120)
+    ) {
         self.narrative = narrative
+        self.isModelCached = isModelCached
+        self.approximateDownloadBytes = approximateDownloadBytes
+        self.simulatedSteps = simulatedSteps
+        self.simulatedStepDelay = simulatedStepDelay
+        // An already-cached stub is ready as soon as it is loaded; an
+        // uncached one has to be "downloaded" first.
+        self.loaded = false
+    }
+
+    /// Simulates loading, reporting incremental byte progress when the weights
+    /// are not yet "cached" so a progress bar can be seen to move.
+    func loadModel() async throws {
+        guard !loaded else { return }
+        if !isModelCached, let onDownloadProgress {
+            for step in 1...simulatedSteps {
+                try? await Task.sleep(for: simulatedStepDelay)
+                let completed = approximateDownloadBytes / Int64(simulatedSteps) * Int64(step)
+                onDownloadProgress(
+                    AICoachDownloadProgress(
+                        completedBytes: min(completed, approximateDownloadBytes),
+                        totalBytes: approximateDownloadBytes
+                    )
+                )
+            }
+            isModelCached = true
+        }
+        loaded = true
     }
 
     func suggestAdaptations(_ request: CoachingRequest) async throws -> CoachingResponse {

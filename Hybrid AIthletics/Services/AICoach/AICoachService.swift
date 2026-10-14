@@ -11,6 +11,26 @@
 import Foundation
 import AICoachCore
 
+/// Byte-level progress for the coach model download.
+///
+/// Carries bytes rather than a bare fraction so the UI can show real amounts
+/// ("1.2 GB of 4.4 GB"), and so progress can be weighted by size. The model
+/// repository is one 4.3 GB weights file beside nine files totalling ~33 MB, so
+/// a file-count-weighted bar reaches 90% within seconds and then appears stuck
+/// for the entire real download.
+struct AICoachDownloadProgress: Equatable, Sendable {
+    /// Bytes present on disk so far.
+    var completedBytes: Int64
+    /// Total bytes expected, or 0 when not yet known.
+    var totalBytes: Int64
+
+    /// Completed fraction in `0...1`, or `nil` when the total isn't known yet.
+    var fraction: Double? {
+        guard totalBytes > 0 else { return nil }
+        return min(max(Double(completedBytes) / Double(totalBytes), 0), 1)
+    }
+}
+
 /// A service that produces coaching suggestions for an athlete's training plan.
 ///
 /// Implementations are expected to be cheap to construct but may perform
@@ -48,20 +68,25 @@ protocol AICoachService: Sendable {
     /// Call this to pre-warm the model so that `isModelReady` becomes `true`.
     func loadModel() async throws
 
-    /// Optional callback invoked with download fraction (0.0–1.0) during
-    /// first-time model weight download. Views should set this before
-    /// triggering `loadModel()` to show a progress bar.
-    var onDownloadProgress: (@Sendable (Double) -> Void)? { get set }
+    /// Optional callback invoked with byte-level progress during the
+    /// first-time model weight download. Set this before triggering
+    /// `loadModel()` to drive a progress bar.
+    var onDownloadProgress: (@Sendable (AICoachDownloadProgress) -> Void)? { get set }
+
+    /// Approximate size of the model download, for the pre-download call to
+    /// action. `0` when unknown.
+    var approximateDownloadBytes: Int64 { get }
 }
 
 extension AICoachService {
     var isModelCached: Bool { true }
     var isModelReady: Bool { true }
     func loadModel() async throws { }
-    var onDownloadProgress: (@Sendable (Double) -> Void)? {
+    var onDownloadProgress: (@Sendable (AICoachDownloadProgress) -> Void)? {
         get { nil }
         set { }
     }
+    var approximateDownloadBytes: Int64 { 0 }
 }
 
 /// Errors that can be surfaced by an `AICoachService` implementation.

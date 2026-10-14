@@ -5899,18 +5899,39 @@ private struct ScriptedCoachService: AICoachService {
     var failure: Error?
     /// Thrown from `loadModel()`, when non-nil.
     var loadFailure: Error?
+    /// Whether the stub reports its weights as already on disk.
+    var isModelCached: Bool = true
+    /// Byte progress emitted from `loadModel()` before it returns.
+    var emittedProgress: [AICoachDownloadProgress] = []
+    /// Simulated download size for the call to action.
+    var approximateDownloadBytes: Int64 = 4_000_000_000
+    /// Counts `loadModel()` calls, so a test can prove nothing loaded.
+    final class LoadCounter: @unchecked Sendable { var count = 0 }
+    let loadCounter = LoadCounter()
     /// Captures the request the store actually sent.
     final class Captured: @unchecked Sendable {
         var request: CoachChatRequest?
     }
     let captured = Captured()
 
-    var onDownloadProgress: (@Sendable (Double) -> Void)? {
-        get { nil }
-        set { }
+    /// Holds the progress callback the store installs, since a struct's
+    /// setter cannot store it directly.
+    final class ProgressBox: @unchecked Sendable {
+        var handler: (@Sendable (AICoachDownloadProgress) -> Void)?
+    }
+    let progressBox = ProgressBox()
+
+    var onDownloadProgress: (@Sendable (AICoachDownloadProgress) -> Void)? {
+        get { progressBox.handler }
+        nonmutating set { progressBox.handler = newValue }
     }
 
     func loadModel() async throws {
+        loadCounter.count += 1
+        for progress in emittedProgress {
+            progressBox.handler?(progress)
+            await Task.yield()
+        }
         if let loadFailure { throw loadFailure }
     }
 
@@ -5964,26 +5985,170 @@ struct CoachChatStoreTests {
 
     // MARK: model lifecycle
 
-    @Test func prepareModelReachesReady() async {
+    @Test func cachedModelLoadsStraightToReady() async {
         let store = CoachChatStore()
-        #expect(store.modelPhase == .idle)
+        #expect(store.modelPhase == .unknown)
         await store.prepareModel(coach: ScriptedCoachService())
         #expect(store.modelPhase == .ready)
         #expect(store.canSend)
     }
 
-    @Test func prepareModelSurfacesAFailure() async {
+    @Test func uncachedModelStopsAtNotDownloaded() async {
+        // A multi-gigabyte download is never started implicitly.
         let store = CoachChatStore()
         var coach = ScriptedCoachService()
-        coach.loadFailure = AICoachError.modelNotLoaded
+        coach.isModelCached = false
         await store.prepareModel(coach: coach)
+
+        #expect(store.modelPhase == .notDownloaded)
+        #expect(store.modelPhase.needsDownload)
+        #expect(!store.canSend, "chat must be gated until the model exists")
+    }
+
+    @Test func checkAvailabilityNeverLoadsTheModel() {
+        // Home calls this on every launch. Loading 4.3 GB of weights there for
+        // a feature the athlete may not open would spike memory for nothing.
+        let store = CoachChatStore()
+        let coach = ScriptedCoachService()
+        store.checkAvailability(coach: coach)
+
+        #expect(store.modelPhase == .downloaded)
+        #expect(coach.loadCounter.count == 0, "checkAvailability must not load")
+        #expect(!store.canSend, "downloaded is not yet ready to generate")
+    }
+
+    @Test func checkAvailabilityReportsAMissingModel() {
+        let store = CoachChatStore()
+        var coach = ScriptedCoachService()
+        coach.isModelCached = false
+        store.checkAvailability(coach: coach)
+
+        #expect(store.modelPhase == .notDownloaded)
+        #expect(coach.loadCounter.count == 0)
+    }
+
+    @Test func downloadedPhaseReadsAsUsableButNotReady() {
+        // The Home card should present a downloaded-but-unloaded coach as live,
+        // because tapping it works — it just needs a moment.
+        #expect(CoachModelPhase.downloaded.isUsable)
+        #expect(!CoachModelPhase.downloaded.isReady)
+        #expect(!CoachModelPhase.downloaded.needsDownload)
+        #expect(!CoachModelPhase.downloaded.isBusy)
+        #expect(!CoachModelPhase.notDownloaded.isUsable)
+        #expect(!CoachModelPhase.downloading(
+            AICoachDownloadProgress(completedBytes: 1, totalBytes: 2)
+        ).isUsable)
+        #expect(!CoachModelPhase.failed("x").isUsable)
+    }
+
+    @Test func checkAvailabilityThenPrepareReachesReady() async {
+        let store = CoachChatStore()
+        let coach = ScriptedCoachService()
+        store.checkAvailability(coach: coach)
+        #expect(store.modelPhase == .downloaded)
+
+        await store.prepareModel(coach: coach)
+        #expect(store.modelPhase == .ready)
+        #expect(coach.loadCounter.count == 1)
+    }
+
+    @Test func downloadModelIsWhatActuallyStartsTheDownload() async {
+        let store = CoachChatStore()
+        var coach = ScriptedCoachService()
+        coach.isModelCached = false
+        await store.prepareModel(coach: coach)
+        #expect(store.modelPhase == .notDownloaded)
+
+        await store.downloadModel(coach: coach)
+        #expect(store.modelPhase == .ready)
+        #expect(store.canSend)
+    }
+
+    @Test func downloadReportsIncrementalByteProgress() async {
+        let store = CoachChatStore()
+        var coach = ScriptedCoachService()
+        coach.isModelCached = false
+        coach.emittedProgress = [
+            AICoachDownloadProgress(completedBytes: 1_000_000_000, totalBytes: 4_000_000_000),
+            AICoachDownloadProgress(completedBytes: 3_000_000_000, totalBytes: 4_000_000_000),
+        ]
+
+        var seen: [Double] = []
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { @MainActor in
+                await store.downloadModel(coach: coach)
+            }
+            group.addTask { @MainActor in
+                for _ in 0..<200 {
+                    if case .downloading(let progress) = store.modelPhase,
+                       let fraction = progress.fraction,
+                       seen.last != fraction {
+                        seen.append(fraction)
+                    }
+                    await Task.yield()
+                }
+            }
+        }
+
+        // The point of the byte weighting: the bar moves through the middle,
+        // not from 0 straight to done.
+        #expect(seen.contains { $0 > 0.1 && $0 < 0.9 }, "saw fractions: \(seen)")
+        #expect(store.modelPhase == .ready)
+    }
+
+    @Test func failedDownloadOffersARetry() async {
+        let store = CoachChatStore()
+        var coach = ScriptedCoachService()
+        coach.isModelCached = false
+        coach.loadFailure = AICoachError.modelNotLoaded
+        await store.downloadModel(coach: coach)
 
         guard case .failed(let reason) = store.modelPhase else {
             Issue.record("expected a failed phase, got \(store.modelPhase)")
             return
         }
         #expect(!reason.isEmpty)
+        #expect(store.modelPhase.needsDownload, "a failure must be retryable")
         #expect(!store.canSend)
+    }
+
+    @Test func refreshDoesNotClobberAnUnseenFailure() async {
+        let store = CoachChatStore()
+        var coach = ScriptedCoachService()
+        coach.isModelCached = false
+        coach.loadFailure = AICoachError.modelNotLoaded
+        await store.downloadModel(coach: coach)
+
+        store.checkAvailability(coach: coach)
+        await store.prepareModel(coach: coach)
+        guard case .failed = store.modelPhase else {
+            Issue.record("the failure should survive a refresh")
+            return
+        }
+    }
+
+    @Test func phaseFlagsAreConsistent() {
+        let progress = AICoachDownloadProgress(completedBytes: 1, totalBytes: 2)
+        #expect(CoachModelPhase.ready.isReady)
+        #expect(!CoachModelPhase.ready.isBusy)
+        #expect(!CoachModelPhase.ready.needsDownload)
+        #expect(CoachModelPhase.notDownloaded.needsDownload)
+        #expect(!CoachModelPhase.notDownloaded.isBusy)
+        #expect(CoachModelPhase.downloading(progress).isBusy)
+        #expect(!CoachModelPhase.downloading(progress).needsDownload)
+        #expect(CoachModelPhase.loadingIntoMemory.isBusy)
+        #expect(!CoachModelPhase.downloaded.isBusy)
+        #expect(CoachModelPhase.failed("x").needsDownload)
+        #expect(!CoachModelPhase.unknown.isBusy)
+        #expect(!CoachModelPhase.unknown.needsDownload)
+    }
+
+    @Test func downloadIsIgnoredWhileAlreadyBusyOrReady() async {
+        let store = await makeStore()
+        #expect(store.modelPhase == .ready)
+        // Re-entry must not knock a ready model back into downloading.
+        await store.downloadModel(coach: ScriptedCoachService())
+        #expect(store.modelPhase == .ready)
     }
 
     // MARK: sending
@@ -6205,7 +6370,7 @@ struct CoachChatStoreTests {
         #expect(store.pendingProposals.isEmpty)
         #expect(store.errorMessage == nil)
         #expect(!store.hasAttachedContext, "the next question needs a fresh snapshot")
-        // Clearing is not unloading — the model stays ready.
+        // Clearing the transcript is not unloading the model.
         #expect(store.modelPhase == .ready)
     }
 
@@ -6387,5 +6552,95 @@ struct TodayTrainingTests {
         #expect(!TodayTraining.isEmpty(aerobic: [exercise], strength: []))
         #expect(!TodayTraining.isEmpty(aerobic: [], strength: [lift]))
         #expect(!TodayTraining.isEmpty(aerobic: [exercise], strength: [lift]))
+    }
+}
+
+// MARK: - Coach Download Progress Tests
+
+struct AICoachDownloadProgressTests {
+
+    @Test func fractionIsBytesCompletedOverTotal() {
+        let progress = AICoachDownloadProgress(
+            completedBytes: 1_000_000, totalBytes: 4_000_000
+        )
+        #expect(progress.fraction == 0.25)
+    }
+
+    @Test func fractionIsNilWithoutAKnownTotal() {
+        // An unknown total must render as indeterminate, not as 0%.
+        #expect(AICoachDownloadProgress(completedBytes: 500, totalBytes: 0).fraction == nil)
+    }
+
+    @Test func fractionIsClampedToZeroAndOne() {
+        // A directory scan can briefly overshoot while a completed file is
+        // moved out of the .incomplete staging area.
+        let over = AICoachDownloadProgress(completedBytes: 9_000, totalBytes: 4_000)
+        #expect(over.fraction == 1.0)
+        let under = AICoachDownloadProgress(completedBytes: -10, totalBytes: 4_000)
+        #expect(under.fraction == 0.0)
+    }
+
+    @Test func descriptionNamesBothAmounts() {
+        let progress = AICoachDownloadProgress(
+            completedBytes: 1_200_000_000, totalBytes: 4_372_000_000
+        )
+        let text = CoachChatView.byteProgressDescription(progress)
+        #expect(text.contains("of"))
+        #expect(text.contains("GB"))
+    }
+
+    @Test func descriptionOmitsTheTotalWhenUnknown() {
+        let progress = AICoachDownloadProgress(completedBytes: 1_200_000, totalBytes: 0)
+        #expect(!CoachChatView.byteProgressDescription(progress).contains("of"))
+    }
+}
+
+// MARK: - Hugging Face Download Pattern Tests
+
+struct HuggingFaceDownloadPatternTests {
+
+    @Test func matchesExtensionGlobs() {
+        let patterns = ["*.safetensors", "*.json", "*.jinja"]
+        #expect(HuggingFaceDownloader.matches("model.safetensors", patterns: patterns))
+        #expect(HuggingFaceDownloader.matches("config.json", patterns: patterns))
+        #expect(HuggingFaceDownloader.matches("chat_template.jinja", patterns: patterns))
+    }
+
+    @Test func rejectsFilesTheDownloadWouldSkip() {
+        // README.md and .gitattributes are not fetched, so counting their bytes
+        // toward the total would make the bar stop short of 100%.
+        let patterns = ["*.safetensors", "*.json", "*.jinja"]
+        #expect(!HuggingFaceDownloader.matches("README.md", patterns: patterns))
+        #expect(!HuggingFaceDownloader.matches(".gitattributes", patterns: patterns))
+    }
+
+    @Test func matchesLiteralNamesAndWildcard() {
+        #expect(HuggingFaceDownloader.matches("config.json", patterns: ["config.json"]))
+        #expect(HuggingFaceDownloader.matches("anything.bin", patterns: ["*"]))
+        #expect(!HuggingFaceDownloader.matches("other.json", patterns: ["config.json"]))
+    }
+
+    @Test func directorySizeSumsNestedFilesIncludingPartials() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString)
+        let nested = root
+            .appendingPathComponent(".cache/huggingface/download")
+        try FileManager.default.createDirectory(
+            at: nested, withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try Data(count: 1_000).write(to: root.appendingPathComponent("config.json"))
+        // A partial download in the staging area must count toward progress.
+        try Data(count: 5_000)
+            .write(to: nested.appendingPathComponent("model.safetensors.abc.incomplete"))
+
+        #expect(HuggingFaceDownloader.directorySize(at: root) == 6_000)
+    }
+
+    @Test func directorySizeOfAMissingDirectoryIsZero() {
+        let missing = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString)
+        #expect(HuggingFaceDownloader.directorySize(at: missing) == 0)
     }
 }

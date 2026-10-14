@@ -18,6 +18,7 @@ struct HomeView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.useMetricUnits) private var useMetricUnits
     @Environment(\.coachChat) private var coachChat
+    @Environment(\.aiCoach) private var coach
 
     @Query private var allExercises: [Exercise]
     @Query private var allStrengthExercises: [StrengthExercise]
@@ -70,7 +71,8 @@ struct HomeView: View {
                     } label: {
                         CoachEntryCard(
                             lastReply: coachChat.lastCoachReply,
-                            isGenerating: coachChat.isGenerating
+                            isGenerating: coachChat.isGenerating,
+                            phase: coachChat.modelPhase
                         )
                     }
                     .buttonStyle(.plain)
@@ -112,6 +114,10 @@ struct HomeView: View {
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Home")
             .navigationBarTitleDisplayMode(.inline)
+            // Reflect model availability on the card. Deliberately a
+            // filesystem check only: it neither downloads nor loads, so the
+            // landing tab never pulls gigabytes of weights into memory.
+            .task { coachChat.checkAvailability(coach: coach) }
             .sheet(item: $quickAddRequest) { request in
                 RecordWorkoutSheet(exercise: nil, defaultDate: request.date)
             }

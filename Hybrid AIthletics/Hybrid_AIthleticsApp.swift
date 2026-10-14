@@ -22,7 +22,7 @@ struct Hybrid_AIthleticsApp: App {
     /// package is not available, invocations throw `AICoachError.notImplemented`.
     ///
     /// Under `-uiTestSeed` this is the stub instead: a UI test must never
-    /// trigger the ~2 GB model download, and the stub's scripted replies are
+    /// trigger the multi-gigabyte model download, and the stub's scripted replies are
     /// what make the chat assertions deterministic.
     private let aiCoach: AICoachService = Self.makeCoachForLaunch()
 
@@ -77,8 +77,16 @@ struct Hybrid_AIthleticsApp: App {
     }
 
     /// Returns the coach service to inject, honoring the UI test harness.
+    ///
+    /// `-uiTestCoachNotDownloaded` yields a stub that reports its weights as
+    /// missing, so tests can drive the pre-download call to action and the
+    /// progress bar without any network use.
     private static func makeCoachForLaunch() -> AICoachService {
-        if CommandLine.arguments.contains("-uiTestSeed") {
+        let arguments = CommandLine.arguments
+        if arguments.contains("-uiTestCoachNotDownloaded") {
+            return StubAICoachService(isModelCached: false)
+        }
+        if arguments.contains("-uiTestSeed") {
             return StubAICoachService()
         }
         return MLXAICoachService()

@@ -16,18 +16,55 @@ import Foundation
 import Observation
 import AICoachCore
 
-/// Lifecycle of the on-device model, surfaced so the chat view can show
-/// download progress before the athlete can send anything.
+/// Lifecycle of the on-device model, surfaced so the chat view can gate itself
+/// and show real download progress.
 enum CoachModelPhase: Equatable {
-    /// Nothing attempted yet.
-    case idle
-    /// Downloading or loading. The fraction is non-nil only while bytes are
-    /// actually moving.
-    case loading(Double?)
+    /// Availability not checked yet.
+    case unknown
+    /// Weights are not on disk. The athlete has to opt into the download —
+    /// it is multi-gigabyte, so it is never started implicitly.
+    case notDownloaded
+    /// Weights are being fetched. Progress is byte-weighted.
+    case downloading(AICoachDownloadProgress)
+    /// Weights are on disk but not yet in memory. The coach is usable — it
+    /// just needs a moment on first use.
+    case downloaded
+    /// Weights are on disk and being loaded into memory. Fast and offline, so
+    /// this needs no call to action.
+    case loadingIntoMemory
     /// Loaded and ready to generate.
     case ready
-    /// Load failed, with a user-facing reason.
+    /// Download or load failed, with a user-facing reason.
     case failed(String)
+
+    /// Whether the coach can be used right now.
+    var isReady: Bool { self == .ready }
+
+    /// Whether work is in flight, so the UI should not offer to start more.
+    var isBusy: Bool {
+        switch self {
+        case .downloading, .loadingIntoMemory: true
+        case .unknown, .notDownloaded, .downloaded, .ready, .failed: false
+        }
+    }
+
+    /// Whether the athlete needs to trigger the download before anything works.
+    var needsDownload: Bool {
+        switch self {
+        case .notDownloaded, .failed: true
+        case .unknown, .downloading, .downloaded, .loadingIntoMemory, .ready: false
+        }
+    }
+
+    /// Whether the coach will work if tapped — the weights exist, even if they
+    /// still have to be read into memory. Drives whether the Home card is
+    /// presented as live or dimmed.
+    var isUsable: Bool {
+        switch self {
+        case .downloaded, .loadingIntoMemory, .ready: true
+        case .unknown, .notDownloaded, .downloading, .failed: false
+        }
+    }
 }
 
 /// The conversation with the AI coach for the life of this app session.
@@ -49,7 +86,7 @@ final class CoachChatStore {
     private(set) var isGenerating = false
 
     /// The model's load phase.
-    private(set) var modelPhase: CoachModelPhase = .idle
+    private(set) var modelPhase: CoachModelPhase = .unknown
 
     /// The last generation error, cleared when a new turn starts.
     private(set) var errorMessage: String?
@@ -67,7 +104,7 @@ final class CoachChatStore {
     // MARK: - Derived state
 
     /// Whether the athlete can send a message right now.
-    var canSend: Bool { modelPhase == .ready && !isGenerating }
+    var canSend: Bool { modelPhase.isReady && !isGenerating }
 
     /// The tail of the last coach reply, for the Home entry card's preview.
     var lastCoachReply: String? {
@@ -78,20 +115,60 @@ final class CoachChatStore {
 
     // MARK: - Model lifecycle
 
-    /// Downloads and loads the model if it isn't ready yet.
+    /// Records whether the weights are on disk. Touches the filesystem only —
+    /// it downloads nothing and loads nothing.
     ///
-    /// Safe to call repeatedly — the chat view calls it from `.task`, which
-    /// re-runs on every appearance.
+    /// Home calls this on appearance so its coach card can present itself
+    /// honestly. It deliberately does **not** load the model: Home is the
+    /// landing tab, and pulling 4.3 GB of weights into memory on every launch
+    /// for a feature the athlete may not open would spike memory and slow the
+    /// launch for nothing.
+    /// - Parameter coach: The service to inspect.
+    func checkAvailability(coach: AICoachService) {
+        guard !modelPhase.isReady, !modelPhase.isBusy else { return }
+        // Don't clobber a failure the athlete hasn't seen yet.
+        if case .failed = modelPhase { return }
+        modelPhase = coach.isModelCached ? .downloaded : .notDownloaded
+    }
+
+    /// Loads already-downloaded weights into memory, so the chat is usable.
+    ///
+    /// Called when the chat appears. When the weights are missing it stops at
+    /// `.notDownloaded` so the athlete is asked first — silently starting a
+    /// multi-gigabyte download on someone's cellular connection is not a
+    /// reasonable default.
     /// - Parameter coach: The service to load.
     func prepareModel(coach: AICoachService) async {
-        guard modelPhase != .ready, !isLoading else { return }
-        modelPhase = .loading(nil)
+        guard !modelPhase.isReady, !modelPhase.isBusy else { return }
+        guard coach.isModelCached else {
+            if case .failed = modelPhase { return }
+            modelPhase = .notDownloaded
+            return
+        }
+        await load(coach: coach, startingAt: .loadingIntoMemory)
+    }
+
+    /// Starts the download, then loads the model. Call only from an explicit
+    /// athlete action.
+    /// - Parameter coach: The service to download and load.
+    func downloadModel(coach: AICoachService) async {
+        guard !modelPhase.isReady, !modelPhase.isBusy else { return }
+        let initial = AICoachDownloadProgress(
+            completedBytes: 0,
+            totalBytes: coach.approximateDownloadBytes
+        )
+        await load(coach: coach, startingAt: .downloading(initial))
+    }
+
+    /// Shared download/load body.
+    private func load(coach: AICoachService, startingAt phase: CoachModelPhase) async {
+        modelPhase = phase
 
         var mutableCoach = coach
-        mutableCoach.onDownloadProgress = { [weak self] fraction in
+        mutableCoach.onDownloadProgress = { [weak self] progress in
             Task { @MainActor [weak self] in
-                guard let self, case .loading = self.modelPhase else { return }
-                self.modelPhase = .loading(fraction)
+                guard let self, self.modelPhase.isBusy else { return }
+                self.modelPhase = .downloading(progress)
             }
         }
 
@@ -101,12 +178,6 @@ final class CoachChatStore {
         } catch {
             modelPhase = .failed(error.localizedDescription)
         }
-    }
-
-    /// Whether a load is already in flight.
-    private var isLoading: Bool {
-        if case .loading = modelPhase { return true }
-        return false
     }
 
     // MARK: - Sending

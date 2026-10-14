@@ -38,11 +38,18 @@ struct CoachChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    if case .loading(let fraction) = store.modelPhase {
-                        modelLoadingCard(fraction: fraction)
-                    }
-                    if case .failed(let reason) = store.modelPhase {
+                    switch store.modelPhase {
+                    case .notDownloaded:
+                        downloadCallToAction(retrying: false)
+                    case .failed(let reason):
                         noticeCard(reason, systemImage: "exclamationmark.triangle", tint: .red)
+                        downloadCallToAction(retrying: true)
+                    case .downloading(let progress):
+                        downloadProgressCard(progress)
+                    case .downloaded, .loadingIntoMemory:
+                        loadingIntoMemoryCard
+                    case .unknown, .ready:
+                        EmptyView()
                     }
 
                     if store.messages.isEmpty {
@@ -108,26 +115,41 @@ struct CoachChatView: View {
 
     // MARK: - Subviews
 
-    /// Download / load progress. Copy carried over from the retired sheet,
-    /// where it was already tuned for the ~4 GB first-run download.
-    private func modelLoadingCard(fraction: Double?) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                ProgressView()
-                Text(coach.isModelCached ? "Loading model…" : "Downloading AI coach…")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+    /// Pre-download call to action. The coach does nothing until the athlete
+    /// opts in, because the download is multi-gigabyte.
+    private func downloadCallToAction(retrying: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                Image(systemName: "arrow.down.circle")
+                    .font(.title2)
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(Color.accentColor)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(retrying ? "Try the download again" : "Enable your AI coach")
+                        .font(.headline)
+                    Text("The coach runs entirely on your device. Its model has to be downloaded once before chat works.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
-            if let fraction {
-                ProgressView(value: fraction).tint(.accentColor)
-                Text("\(Int(fraction * 100))% — ~4 GB download, this only happens once.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            } else if !coach.isModelCached {
-                Text("~4 GB download — this only happens once.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+
+            Button {
+                Task { await store.downloadModel(coach: coach) }
+            } label: {
+                Label(
+                    "Download\(downloadSizeSuffix)",
+                    systemImage: "arrow.down.circle.fill"
+                )
+                .frame(maxWidth: .infinity)
             }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .accessibilityIdentifier("coach.chat.download")
+
+            Text("Best over Wi-Fi. You can keep using the rest of the app while it downloads.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -135,7 +157,94 @@ struct CoachChatView: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color(.secondarySystemGroupedBackground))
         )
+        // `.contain` makes the container queryable; the identifier alone
+        // only groups its children and no element matches.
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("coach.chat.downloadPrompt")
     }
+
+    /// Live download progress, weighted by bytes rather than file count.
+    private func downloadProgressCard(_ progress: AICoachDownloadProgress) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Text("Downloading your AI coach")
+                    .font(.callout.weight(.medium))
+                Spacer()
+                if let fraction = progress.fraction {
+                    Text("\(Int(fraction * 100))%")
+                        .font(.callout.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let fraction = progress.fraction {
+                ProgressView(value: fraction).tint(.accentColor)
+            } else {
+                ProgressView().progressViewStyle(.linear)
+            }
+
+            Text(Self.byteProgressDescription(progress))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+
+            Text("This only happens once. Leaving this screen won't cancel it.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+        )
+        // `.contain` makes the container queryable; the identifier alone
+        // only groups its children and no element matches.
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("coach.chat.downloadProgress")
+    }
+
+    /// Weights are on disk; this is the quick, offline load into memory.
+    private var loadingIntoMemoryCard: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+            Text("Starting your coach…")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+        )
+        // `.contain` makes the container queryable; the identifier alone
+        // only groups its children and no element matches.
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("coach.chat.loading")
+    }
+
+    /// " (4.4 GB)" when a size is known, else "".
+    private var downloadSizeSuffix: String {
+        let bytes = coach.approximateDownloadBytes
+        guard bytes > 0 else { return "" }
+        return " (\(Self.byteFormatter.string(fromByteCount: bytes)))"
+    }
+
+    /// e.g. "1.2 GB of 4.4 GB".
+    static func byteProgressDescription(_ progress: AICoachDownloadProgress) -> String {
+        let done = byteFormatter.string(fromByteCount: progress.completedBytes)
+        guard progress.totalBytes > 0 else { return done }
+        return "\(done) of \(byteFormatter.string(fromByteCount: progress.totalBytes))"
+    }
+
+    /// Cached per project convention.
+    static let byteFormatter: ByteCountFormatter = {
+        let f = ByteCountFormatter()
+        f.countStyle = .file
+        f.allowedUnits = [.useMB, .useGB]
+        return f
+    }()
 
     private func noticeCard(
         _ text: String,
@@ -155,7 +264,7 @@ struct CoachChatView: View {
 
     private var suggestionChips: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Ask about…")
+            Text(store.canSend ? "Ask about…" : "Once your coach is ready, ask about…")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
             ForEach(Self.suggestions, id: \.self) { suggestion in
@@ -177,11 +286,14 @@ struct CoachChatView: View {
                 .disabled(!store.canSend)
             }
         }
+        // Greyed out until the model is downloaded and loaded, so the gating is
+        // visible rather than only felt on tap.
+        .opacity(store.canSend ? 1 : 0.4)
     }
 
     private var composer: some View {
         HStack(spacing: 10) {
-            TextField("Message your coach", text: $draft, axis: .vertical)
+            TextField(composerPrompt, text: $draft, axis: .vertical)
                 .lineLimit(1...5)
                 .textFieldStyle(.plain)
                 .padding(.vertical, 8)
@@ -192,6 +304,7 @@ struct CoachChatView: View {
                 )
                 .submitLabel(.send)
                 .onSubmit { send(draft) }
+                .disabled(!store.canSend)
                 .accessibilityIdentifier("coach.chat.input")
 
             Button {
@@ -206,6 +319,17 @@ struct CoachChatView: View {
         .padding(.horizontal)
         .padding(.vertical, 8)
         .background(.bar)
+        .opacity(store.canSend ? 1 : 0.5)
+    }
+
+    /// Placeholder text that explains why the composer is inert.
+    private var composerPrompt: String {
+        switch store.modelPhase {
+        case .notDownloaded, .failed: "Download the coach to start chatting"
+        case .downloading: "Downloading your coach…"
+        case .downloaded, .loadingIntoMemory, .unknown: "Starting your coach…"
+        case .ready: "Message your coach"
+        }
     }
 
     /// Whether the composer's send button is live.

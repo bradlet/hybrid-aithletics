@@ -328,3 +328,101 @@ final class HomeUITests: XCTestCase {
         )
     }
 }
+
+// MARK: - Model gating
+
+extension HomeUITests {
+
+    /// Launches with a coach whose weights are reported missing, so the
+    /// pre-download call to action is showing.
+    @MainActor
+    private func launchWithoutModel() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments.append("-uiTestSeed")
+        app.launchArguments.append("-uiTestCoachNotDownloaded")
+        app.launch()
+        return app
+    }
+
+    @MainActor
+    func testHomeCardAdvertisesTheDownloadWhenModelIsMissing() throws {
+        let app = launchWithoutModel()
+        let card = app.buttons["home.coachCard"]
+        XCTAssertTrue(card.waitForExistence(timeout: 5), "coach card should exist")
+        XCTAssertTrue(
+            card.label.contains("download") || card.label.contains("Download"),
+            "the card should read as a call to action, got: \(card.label)"
+        )
+    }
+
+    @MainActor
+    func testChatShowsDownloadCallToActionAndBlocksSending() throws {
+        let app = launchWithoutModel()
+        app.buttons["home.coachCard"].tap()
+
+        XCTAssertTrue(
+            app.otherElements["coach.chat.downloadPrompt"].waitForExistence(timeout: 5),
+            "the download call to action should be showing"
+        )
+        let download = app.buttons["coach.chat.download"]
+        XCTAssertTrue(download.exists, "a Download button should be offered")
+        XCTAssertTrue(
+            download.label.contains("GB"),
+            "the button should state the size, got: \(download.label)"
+        )
+
+        // Chat is gated: the composer exists but cannot be used.
+        let send = app.buttons["coach.chat.send"]
+        XCTAssertTrue(send.exists)
+        XCTAssertFalse(send.isEnabled, "send must be disabled before download")
+        XCTAssertFalse(
+            app.textFields["coach.chat.input"].isEnabled,
+            "the composer must be disabled before download"
+        )
+    }
+
+    @MainActor
+    func testSuggestionsAreNotTappableBeforeDownload() throws {
+        let app = launchWithoutModel()
+        app.buttons["home.coachCard"].tap()
+        XCTAssertTrue(
+            app.otherElements["coach.chat.downloadPrompt"].waitForExistence(timeout: 5),
+            "wait for the gated state"
+        )
+        XCTAssertFalse(
+            app.buttons["What should change about my upcoming plan?"].isEnabled,
+            "suggestions must be inert until the coach is ready"
+        )
+    }
+
+    @MainActor
+    func testDownloadShowsProgressThenEnablesChat() throws {
+        let app = launchWithoutModel()
+        app.buttons["home.coachCard"].tap()
+        let download = app.buttons["coach.chat.download"]
+        XCTAssertTrue(download.waitForExistence(timeout: 5), "Download should be offered")
+        download.tap()
+
+        // The progress card appears while bytes are moving.
+        XCTAssertTrue(
+            app.otherElements["coach.chat.downloadProgress"].waitForExistence(timeout: 5),
+            "a progress card should appear during the download"
+        )
+
+        // And once finished, chat becomes usable.
+        let input = app.textFields["coach.chat.input"]
+        let enabled = expectation(description: "composer becomes enabled")
+        let start = Date()
+        DispatchQueue.global().async {
+            while Date().timeIntervalSince(start) < 20 {
+                if input.isEnabled { enabled.fulfill(); return }
+                Thread.sleep(forTimeInterval: 0.3)
+            }
+        }
+        wait(for: [enabled], timeout: 25)
+        XCTAssertFalse(
+            app.otherElements["coach.chat.downloadPrompt"].exists,
+            "the call to action should be gone once the model is ready"
+        )
+    }
+}

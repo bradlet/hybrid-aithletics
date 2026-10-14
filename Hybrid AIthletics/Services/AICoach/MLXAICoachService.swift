@@ -46,9 +46,9 @@ final class MLXAICoachService: AICoachService, @unchecked Sendable {
     /// build is 5.4 GB or larger.
     ///
     /// At 4.34 GB this is appreciably heavier than the Gemma 3 4B QAT build it
-    /// replaced (3.00 GB); watch for jetsam on non-Pro devices. This repo also
-    /// ships no `tokenizer_config.json`, so tokenizer metadata comes from
-    /// `chat_template.jinja` via swift-transformers' fallback.
+    /// replaced (3.00 GB); watch for jetsam on non-Pro devices. The repo does
+    /// ship `tokenizer_config.json` (with an inline chat template and
+    /// `eot_token` of `<turn|>`), so tokenizer metadata needs no fallback.
     static let modelID = "lmstudio-community/gemma-4-E2B-it-MLX-4bit"
 
     // MARK: - Generation parameters
@@ -60,10 +60,15 @@ final class MLXAICoachService: AICoachService, @unchecked Sendable {
     /// Generation parameters — reads from AICoachCore's single source of truth.
     var generationConfig = GenerationConfig.production
 
-    /// Optional callback invoked with download progress (0.0–1.0) during
-    /// first-time model weight download. Set by the presenting view before
-    /// triggering `loadModel()`.
-    var onDownloadProgress: (@Sendable (Double) -> Void)?
+    /// Optional callback invoked with byte-level download progress during the
+    /// first-time model weight download. Set before triggering `loadModel()`.
+    var onDownloadProgress: (@Sendable (AICoachDownloadProgress) -> Void)?
+
+    /// Approximate download size of `modelID`, for the pre-download call to
+    /// action. Hardcoded beside `modelID` because the real figure needs a
+    /// network round-trip, and the CTA has to render before any network use;
+    /// the downloader reports exact bytes once it starts. Update both together.
+    var approximateDownloadBytes: Int64 { 4_372_000_000 }
 
     #if canImport(MLXLLM)
     // `toolCallFormat` is what lets the runtime's GemmaFunctionParser recognize
@@ -114,13 +119,19 @@ final class MLXAICoachService: AICoachService, @unchecked Sendable {
         let progressHandler = onDownloadProgress
         // mlx-swift-lm 3.x dropped its bundled Hub integration: the caller now
         // supplies how weights are fetched and how the tokenizer is read.
-        // See MLXModelLoading.swift.
+        // See MLXModelLoading.swift, which also makes this progress
+        // byte-weighted rather than file-count-weighted.
         cachedContainer = try await LLMModelFactory.shared.loadContainer(
             from: HuggingFaceDownloader(),
             using: HuggingFaceTokenizerLoader(),
             configuration: configuration
         ) { progress in
-            progressHandler?(progress.fractionCompleted)
+            progressHandler?(
+                AICoachDownloadProgress(
+                    completedBytes: progress.completedUnitCount,
+                    totalBytes: progress.totalUnitCount
+                )
+            )
         }
         #else
         throw AICoachError.notImplemented(message:

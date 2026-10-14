@@ -284,6 +284,9 @@ struct CoachMessageBubble: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
+        // `.contain` makes the container itself queryable; without it the
+        // identifier only groups the children and no element matches.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("coach.chat.bubble.\(message.role.rawValue)")
     }
 }
@@ -325,6 +328,7 @@ struct ProposalCard: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(Color.accentColor.opacity(0.10))
         )
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("coach.chat.proposal")
     }
 

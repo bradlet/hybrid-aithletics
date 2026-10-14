@@ -52,7 +52,6 @@ struct CoachEntryCard: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color(.secondarySystemGroupedBackground))
         )
-        .accessibilityIdentifier("home.coachCard")
     }
 
     /// Shows where the conversation left off, so returning to Home reads as

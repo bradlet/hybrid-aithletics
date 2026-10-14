@@ -74,6 +74,7 @@ struct HomeView: View {
                         )
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier("home.coachCard")
 
                     TodayTrainingSection(
                         aerobic: todayAerobic,

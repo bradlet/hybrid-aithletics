@@ -11,7 +11,7 @@
 //  The stub's trigger phrases drive each branch: "record" yields a workout
 //  proposal, "change my plan" a schedule-change proposal, "garble" a rejected
 //  tool call.
-//
+
 
 import XCTest
 

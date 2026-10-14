@@ -6,9 +6,12 @@
 //
 //  The model is downloaded from Hugging Face on first use and cached locally
 //  for offline access. The real implementation compiles when the `MLXLLM`
-//  module is available (mlx-swift-examples SPM package, >= 2.0.0). The #else
+//  module is available (mlx-swift-lm SPM package, >= 3.32.3). The #else
 //  branches throw AICoachError.notImplemented so the app stays launchable on
-//  simulators or CI hosts where the package has not yet resolved.
+//  hosts where the package has not been resolved.
+//
+//  Weight download and tokenizer loading are supplied by MLXModelLoading.swift:
+//  mlx-swift-lm 3.0 removed its bundled Hugging Face Hub integration.
 
 import Foundation
 import AICoachCore
@@ -17,7 +20,6 @@ import AICoachCore
 import MLX
 import MLXLLM
 import MLXLMCommon
-import Tokenizers
 #endif
 
 /// Coaching service backed by Gemma 3 4B downloaded from Hugging Face and run
@@ -60,10 +62,7 @@ final class MLXAICoachService: AICoachService, @unchecked Sendable {
     /// Whether the model weights are already cached on disk.
     var isModelCached: Bool {
         #if canImport(MLXLLM)
-        let dir = configuration.modelDirectory()
-        return FileManager.default.fileExists(
-            atPath: dir.appendingPathComponent("config.json").path
-        )
+        return isHuggingFaceRepoCached(Self.modelID)
         #else
         return false
         #endif
@@ -89,7 +88,12 @@ final class MLXAICoachService: AICoachService, @unchecked Sendable {
         // SIGKILLs us mid-token. 20 MB matches MLX's iOS guidance.
         MLX.Memory.cacheLimit = 20 * 1024 * 1024
         let progressHandler = onDownloadProgress
+        // mlx-swift-lm 3.x dropped its bundled Hub integration: the caller now
+        // supplies how weights are fetched and how the tokenizer is read.
+        // See MLXModelLoading.swift.
         cachedContainer = try await LLMModelFactory.shared.loadContainer(
+            from: HuggingFaceDownloader(),
+            using: HuggingFaceTokenizerLoader(),
             configuration: configuration
         ) { progress in
             progressHandler?(progress.fractionCompleted)

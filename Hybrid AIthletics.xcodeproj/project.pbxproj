@@ -12,6 +12,8 @@
 		1C9E36BB2FA2550C0022393D /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 1C9E36BA2FA2550C0022393D /* GoogleSignInSwift */; };
 		1CCF39D82F88A594009D4D21 /* AICoachCore in Frameworks */ = {isa = PBXBuildFile; productRef = AA0001032FA6B00000000001 /* AICoachCore */; };
 		1CD325422F849D6D00F2A1B5 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = 1CD325412F849D6D00F2A1B5 /* MLXLLM */; };
+		BB0002032FB0C00000000001 /* Hub in Frameworks */ = {isa = PBXBuildFile; productRef = BB0002012FB0C00000000001 /* Hub */; };
+		BB0002042FB0C00000000001 /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = BB0002022FB0C00000000001 /* Tokenizers */; };
 		1CD325442F849D6D00F2A1B5 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = 1CD325432F849D6D00F2A1B5 /* MLXLMCommon */; };
 		AA0001012FA6B00000000001 /* AICoachCore in Frameworks */ = {isa = PBXBuildFile; productRef = AA0001022FA6B00000000001 /* AICoachCore */; };
 /* End PBXBuildFile section */
@@ -82,6 +84,8 @@
 				1C9E36B92FA2550C0022393D /* GoogleSignIn in Frameworks */,
 				1CD325422F849D6D00F2A1B5 /* MLXLLM in Frameworks */,
 				AA0001012FA6B00000000001 /* AICoachCore in Frameworks */,
+				BB0002032FB0C00000000001 /* Hub in Frameworks */,
+				BB0002042FB0C00000000001 /* Tokenizers in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -155,6 +159,8 @@
 			packageProductDependencies = (
 				1CD325412F849D6D00F2A1B5 /* MLXLLM */,
 				1CD325432F849D6D00F2A1B5 /* MLXLMCommon */,
+				BB0002012FB0C00000000001 /* Hub */,
+				BB0002022FB0C00000000001 /* Tokenizers */,
 				AA0001022FA6B00000000001 /* AICoachCore */,
 				1C9E36B82FA2550C0022393D /* GoogleSignIn */,
 				1C9E36BA2FA2550C0022393D /* GoogleSignInSwift */,
@@ -246,6 +252,7 @@
 				1CD325402F849D6D00F2A1B5 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
 				AA0001042FA6B00000000001 /* XCLocalSwiftPackageReference "Packages/AICoachCore" */,
 				1C9E36B62FA24CDB0022393D /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
+				BB0002002FB0C00000000001 /* XCRemoteSwiftPackageReference "swift-transformers" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 1C1476D22F817B6800DCF85D /* Products */;
@@ -658,12 +665,20 @@
 				minimumVersion = 9.1.0;
 			};
 		};
+		BB0002002FB0C00000000001 /* XCRemoteSwiftPackageReference "swift-transformers" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/huggingface/swift-transformers";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.3.5;
+			};
+		};
 		1CD325402F849D6D00F2A1B5 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/ml-explore/mlx-swift-lm";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 2.31.3;
+				minimumVersion = 3.32.3;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
@@ -678,6 +693,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 1C9E36B62FA24CDB0022393D /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
 			productName = GoogleSignInSwift;
+		};
+		BB0002012FB0C00000000001 /* Hub */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BB0002002FB0C00000000001 /* XCRemoteSwiftPackageReference "swift-transformers" */;
+			productName = Hub;
+		};
+		BB0002022FB0C00000000001 /* Tokenizers */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BB0002002FB0C00000000001 /* XCRemoteSwiftPackageReference "swift-transformers" */;
+			productName = Tokenizers;
 		};
 		1CD325412F849D6D00F2A1B5 /* MLXLLM */ = {
 			isa = XCSwiftPackageProductDependency;

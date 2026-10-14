@@ -20,7 +20,11 @@ struct Hybrid_AIthleticsApp: App {
     /// Gemma 3 4B on-device. The model is downloaded from Hugging Face on
     /// first use and cached locally for offline access. When the MLX-Swift
     /// package is not available, invocations throw `AICoachError.notImplemented`.
-    private let aiCoach: AICoachService = MLXAICoachService()
+    ///
+    /// Under `-uiTestSeed` this is the stub instead: a UI test must never
+    /// trigger the ~2 GB model download, and the stub's scripted replies are
+    /// what make the chat assertions deterministic.
+    private let aiCoach: AICoachService = Self.makeCoachForLaunch()
 
     /// Shared HealthKit import service. Backed by a real `HKHealthStore`,
     /// used by the History tab's "Import from Apple Health" flow.
@@ -31,6 +35,11 @@ struct Hybrid_AIthleticsApp: App {
     /// coordinator surfaces `.notImplemented` errors when the user tries
     /// to enable sync.
     @State private var sheetsSync = GoogleSheetsSyncCoordinator(api: LiveGoogleSheetsAPI())
+
+    /// The coach conversation for this app session. App-scope so the transcript
+    /// survives tab switches and navigation pops; deliberately not persisted,
+    /// so it starts fresh on every launch.
+    @State private var coachChat = CoachChatStore()
 
     init() {
         // When launched by the UI test harness with `-uiTestSeed`, replace any
@@ -48,6 +57,7 @@ struct Hybrid_AIthleticsApp: App {
                 .environment(\.aiCoach, aiCoach)
                 .environment(\.healthKitImport, healthKitImport)
                 .environment(\.googleSheetsSync, sheetsSync)
+                .environment(\.coachChat, coachChat)
                 .task {
                     // Restore Google Sheets sync state from AppConfiguration
                     // and silently re-authorize the OAuth session if a
@@ -64,6 +74,14 @@ struct Hybrid_AIthleticsApp: App {
                 #endif
         }
         .modelContainer(sharedModelContainer)
+    }
+
+    /// Returns the coach service to inject, honoring the UI test harness.
+    private static func makeCoachForLaunch() -> AICoachService {
+        if CommandLine.arguments.contains("-uiTestSeed") {
+            return StubAICoachService()
+        }
+        return MLXAICoachService()
     }
 
     /// Builds the model container to install into the view hierarchy.

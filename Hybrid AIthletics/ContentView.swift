@@ -2,7 +2,7 @@
 //  ContentView.swift
 //  Hybrid AIthletics
 //
-//  Root view containing the three-tab navigation structure.
+//  Root view containing the four-tab navigation structure.
 //  Reads the unit configuration and injects it into the environment.
 //
 
@@ -24,6 +24,8 @@ struct ContentView: View {
 
     var body: some View {
         TabView {
+            HomeView()
+                .tabItem { Label("Home", systemImage: "house") }
             AerobicTrainingView()
                 .tabItem { Label("Training", systemImage: "figure.run") }
             StrengthTrainingView()

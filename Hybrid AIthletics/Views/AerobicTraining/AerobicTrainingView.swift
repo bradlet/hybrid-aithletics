@@ -9,7 +9,6 @@
 
 import SwiftUI
 import SwiftData
-import AICoachCore
 
 /// The aerobic training tab displaying a monthly overview and weekly exercise plan.
 struct AerobicTrainingView: View {
@@ -32,8 +31,6 @@ struct AerobicTrainingView: View {
     @State private var editingExercise: Exercise?
     /// The completed exercise opened in the unified planned + completed editor.
     @State private var detailExercise: Exercise?
-    /// The request passed to the AI coach sheet when the user taps "Ask Coach".
-    @State private var coachRequest: CoachingRequest?
     /// Quick-add request (records a workout directly without scheduling first).
     @State private var quickAddRequest: QuickAddRequest?
     /// Navigation request from monthly calendar tap to highlight a day in the weekly view.
@@ -152,18 +149,6 @@ struct AerobicTrainingView: View {
             .sheet(item: $quickAddRequest) { request in
                 RecordWorkoutSheet(exercise: nil, defaultDate: request.date)
             }
-            .sheet(item: $coachRequest) { request in
-                AICoachSheet(request: request)
-            }
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        coachRequest = buildCoachRequest()
-                    } label: {
-                        Label("Ask Coach", systemImage: "sparkles")
-                    }
-                }
-            }
             .onChange(of: exerciseNavigationRequest) { _, newValue in
                 guard let request = newValue else { return }
                 Task { @MainActor in
@@ -198,33 +183,6 @@ struct AerobicTrainingView: View {
         } else {
             addExerciseRequest = AddExerciseRequest(date: day)
         }
-    }
-
-    /// Assembles a `CoachingRequest` from the last 4 weeks of workouts and
-    /// the next 2 weeks of scheduled exercises. Called from the "Ask Coach"
-    /// toolbar button; the query-owning top-level view is the right place to
-    /// read SwiftData per the project's "no ViewModels" convention.
-    private func buildCoachRequest() -> CoachingRequest {
-        let now = Date()
-        let calendar = Calendar.current
-        let fourWeeksAgo = calendar.date(byAdding: .weekOfYear, value: -4, to: now) ?? now
-        let twoWeeksAhead = calendar.date(byAdding: .weekOfYear, value: 2, to: now) ?? now
-
-        let recent = allExercises
-            .filter { $0.isCompleted && $0.date >= fourWeeksAgo && $0.date <= now }
-            .sorted { $0.date < $1.date }
-            .map { CoachWorkout(from: $0) }
-
-        let upcoming = allExercises
-            .filter { !$0.isCompleted && $0.date >= now.startOfDay && $0.date <= twoWeeksAhead }
-            .sorted { $0.date < $1.date }
-            .map { CoachExercise(from: $0) }
-
-        return CoachingRequest(
-            recentWorkouts: recent,
-            upcomingExercises: upcoming,
-            useMetricUnits: useMetricUnits
-        )
     }
 
     /// Header showing week navigation and mileage stats.

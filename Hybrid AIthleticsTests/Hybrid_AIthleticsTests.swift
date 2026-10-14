@@ -5888,3 +5888,504 @@ struct CoachProposalApplierTests {
         #expect(feelingOnly.perceivedExertion == nil, "feeling must not imply an exertion")
     }
 }
+
+// MARK: - Coach Chat Store Tests
+
+/// A coach whose chat stream is scripted by the test.
+private struct ScriptedCoachService: AICoachService {
+    /// Events yielded in order before the stream finishes.
+    var events: [CoachEvent] = []
+    /// Thrown after `events` have been yielded, when non-nil.
+    var failure: Error?
+    /// Thrown from `loadModel()`, when non-nil.
+    var loadFailure: Error?
+    /// Captures the request the store actually sent.
+    final class Captured: @unchecked Sendable {
+        var request: CoachChatRequest?
+    }
+    let captured = Captured()
+
+    var onDownloadProgress: (@Sendable (Double) -> Void)? {
+        get { nil }
+        set { }
+    }
+
+    func loadModel() async throws {
+        if let loadFailure { throw loadFailure }
+    }
+
+    func suggestAdaptations(_ request: CoachingRequest) async throws -> CoachingResponse {
+        CoachingResponse(narrative: "")
+    }
+
+    func streamSuggestion(_ request: CoachingRequest) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { $0.finish() }
+    }
+
+    func streamChat(_ request: CoachChatRequest) -> AsyncThrowingStream<CoachEvent, Error> {
+        captured.request = request
+        let events = events
+        let failure = failure
+        return AsyncThrowingStream { continuation in
+            for event in events { continuation.yield(event) }
+            continuation.finish(throwing: failure)
+        }
+    }
+}
+
+@MainActor
+struct CoachChatStoreTests {
+
+    private func makeStore(ready: Bool = true) async -> CoachChatStore {
+        let store = CoachChatStore()
+        if ready {
+            await store.prepareModel(coach: ScriptedCoachService())
+        }
+        return store
+    }
+
+    private func context() -> CoachingRequest {
+        CoachingRequest(
+            recentWorkouts: [
+                CoachWorkout(
+                    date: Date(),
+                    type: .easyRun,
+                    distanceMiles: 4.0,
+                    durationSeconds: 2100,
+                    feeling: nil,
+                    perceivedExertion: nil,
+                    notes: ""
+                )
+            ],
+            upcomingExercises: [],
+            useMetricUnits: false
+        )
+    }
+
+    // MARK: model lifecycle
+
+    @Test func prepareModelReachesReady() async {
+        let store = CoachChatStore()
+        #expect(store.modelPhase == .idle)
+        await store.prepareModel(coach: ScriptedCoachService())
+        #expect(store.modelPhase == .ready)
+        #expect(store.canSend)
+    }
+
+    @Test func prepareModelSurfacesAFailure() async {
+        let store = CoachChatStore()
+        var coach = ScriptedCoachService()
+        coach.loadFailure = AICoachError.modelNotLoaded
+        await store.prepareModel(coach: coach)
+
+        guard case .failed(let reason) = store.modelPhase else {
+            Issue.record("expected a failed phase, got \(store.modelPhase)")
+            return
+        }
+        #expect(!reason.isEmpty)
+        #expect(!store.canSend)
+    }
+
+    // MARK: sending
+
+    @Test func sendAppendsUserThenCoachAndAccumulatesText() async {
+        let store = await makeStore()
+        var coach = ScriptedCoachService()
+        coach.events = [.textChunk("Nice "), .textChunk("work."), .textChunk(" Keep going.")]
+
+        await store.send("How am I doing?", coach: coach, context: context())
+
+        #expect(store.messages.count == 2)
+        #expect(store.messages[0].role == .user)
+        #expect(store.messages[0].text == "How am I doing?")
+        #expect(store.messages[1].role == .coach)
+        #expect(store.messages[1].text == "Nice work. Keep going.")
+        #expect(!store.isGenerating)
+    }
+
+    @Test func sendTrimsWhitespaceAndIgnoresBlankInput() async {
+        let store = await makeStore()
+        var coach = ScriptedCoachService()
+        coach.events = [.textChunk("hi")]
+
+        await store.send("   \n  ", coach: coach, context: context())
+        #expect(store.messages.isEmpty)
+
+        await store.send("  hello  ", coach: coach, context: context())
+        #expect(store.messages.first?.text == "hello")
+    }
+
+    @Test func replyActionIsTreatedAsText() async {
+        let store = await makeStore()
+        var coach = ScriptedCoachService()
+        coach.events = [.action(.reply("Straight from the chat tool."))]
+
+        await store.send("hi", coach: coach, context: context())
+
+        #expect(store.messages.last?.text == "Straight from the chat tool.")
+        #expect(store.pendingProposals.isEmpty)
+    }
+
+    // MARK: context attachment
+
+    @Test func firstSendAttachesContextAndSecondDoesNot() async {
+        let store = await makeStore()
+        var coach = ScriptedCoachService()
+        coach.events = [.textChunk("ok")]
+
+        #expect(!store.hasAttachedContext)
+        await store.send("first", coach: coach, context: context())
+        #expect(coach.captured.request?.context != nil)
+        #expect(store.hasAttachedContext)
+
+        await store.send("second", coach: coach, context: context())
+        #expect(coach.captured.request?.context == nil)
+    }
+
+    @Test func aFailedFirstTurnDoesNotConsumeTheContext() async {
+        let store = await makeStore()
+        var failing = ScriptedCoachService()
+        failing.failure = AICoachError.modelNotLoaded
+        await store.send("first", coach: failing, context: context())
+
+        // The snapshot never reached a transcript the model kept, so the next
+        // turn must still carry it.
+        #expect(!store.hasAttachedContext)
+        #expect(store.errorMessage != nil)
+
+        var succeeding = ScriptedCoachService()
+        succeeding.events = [.textChunk("ok")]
+        await store.send("again", coach: succeeding, context: context())
+        #expect(succeeding.captured.request?.context != nil)
+    }
+
+    @Test func sentRequestExcludesThePlaceholderCoachTurn() async {
+        let store = await makeStore()
+        var coach = ScriptedCoachService()
+        coach.events = [.textChunk("ok")]
+
+        await store.send("hi", coach: coach, context: context())
+
+        let sent = coach.captured.request?.messages ?? []
+        #expect(sent.count == 1)
+        #expect(sent.last?.role == .user)
+    }
+
+    // MARK: proposals
+
+    @Test func proposalLandsPendingKeyedByItsCoachTurn() async {
+        let store = await makeStore()
+        let proposal = WorkoutProposal(date: Date(), exerciseType: .easyRun, distanceMiles: 5)
+        var coach = ScriptedCoachService()
+        coach.events = [.textChunk("Logging that."), .action(.recordWorkout(proposal))]
+
+        await store.send("I ran 5 miles", coach: coach, context: context())
+
+        let coachTurn = store.messages.last { $0.role == .coach }
+        #expect(coachTurn != nil)
+        #expect(store.proposal(for: coachTurn!.id) == .recordWorkout(proposal))
+        #expect(store.pendingProposals.count == 1)
+    }
+
+    @Test func resolvingAProposalClearsIt() async {
+        let store = await makeStore()
+        var coach = ScriptedCoachService()
+        coach.events = [.action(.suggestScheduleChange(ScheduleChangeProposal(
+            date: Date(), kind: .remove, rationale: "too much"
+        )))]
+        await store.send("change my plan", coach: coach, context: context())
+
+        let id = store.messages.last { $0.role == .coach }!.id
+        store.resolveProposal(for: id)
+        #expect(store.proposal(for: id) == nil)
+    }
+
+    @Test func confirmingAProposalAppendsANote() async {
+        let store = await makeStore()
+        var coach = ScriptedCoachService()
+        coach.events = [.action(.recordWorkout(WorkoutProposal(date: Date(), exerciseType: .run)))]
+        await store.send("record it", coach: coach, context: context())
+
+        let id = store.messages.last { $0.role == .coach }!.id
+        store.confirmProposal(for: id, note: "Saved.")
+
+        #expect(store.proposal(for: id) == nil)
+        #expect(store.messages.last?.text == "Saved.")
+        #expect(store.messages.last?.role == .coach)
+    }
+
+    @Test func aProposalOnlyTurnKeepsItsBubble() async {
+        let store = await makeStore()
+        var coach = ScriptedCoachService()
+        coach.events = [.action(.recordWorkout(WorkoutProposal(date: Date(), exerciseType: .run)))]
+
+        await store.send("record it", coach: coach, context: context())
+
+        // No text arrived, but the bubble must survive to host the proposal.
+        #expect(store.messages.count == 2)
+        #expect(store.messages.last?.role == .coach)
+    }
+
+    // MARK: rejected tool calls
+
+    @Test func rejectedToolCallIsSurfacedNotSwallowed() async {
+        let store = await makeStore()
+        var coach = ScriptedCoachService()
+        coach.events = [.rejectedToolCall(reason: "malformed_syntax")]
+
+        await store.send("garble it", coach: coach, context: context())
+
+        let text = store.messages.last?.text ?? ""
+        #expect(text.contains("malformed_syntax"))
+        #expect(store.pendingProposals.isEmpty)
+    }
+
+    // MARK: errors
+
+    @Test func failureSurfacesAndLeavesNoBlankBubble() async {
+        let store = await makeStore()
+        var coach = ScriptedCoachService()
+        coach.failure = AICoachError.modelNotLoaded
+
+        await store.send("hi", coach: coach, context: context())
+
+        #expect(store.errorMessage != nil)
+        #expect(!store.isGenerating, "a failure must not wedge the composer")
+        #expect(store.messages.count == 1, "the empty coach turn is pruned")
+        #expect(store.messages[0].role == .user)
+    }
+
+    @Test func partialTextIsKeptWhenGenerationThenFails() async {
+        let store = await makeStore()
+        var coach = ScriptedCoachService()
+        coach.events = [.textChunk("Here is what I think")]
+        coach.failure = AICoachError.modelNotLoaded
+
+        await store.send("hi", coach: coach, context: context())
+
+        #expect(store.messages.last?.text == "Here is what I think")
+        #expect(store.errorMessage != nil)
+    }
+
+    @Test func aNewSendClearsThePreviousError() async {
+        let store = await makeStore()
+        var failing = ScriptedCoachService()
+        failing.failure = AICoachError.modelNotLoaded
+        await store.send("hi", coach: failing, context: context())
+        #expect(store.errorMessage != nil)
+
+        var succeeding = ScriptedCoachService()
+        succeeding.events = [.textChunk("better")]
+        await store.send("again", coach: succeeding, context: context())
+        #expect(store.errorMessage == nil)
+    }
+
+    // MARK: lifecycle
+
+    @Test func cancelStopsGenerating() async {
+        let store = await makeStore()
+        store.cancel()
+        #expect(!store.isGenerating)
+    }
+
+    @Test func clearResetsEverythingAndReArmsContext() async {
+        let store = await makeStore()
+        var coach = ScriptedCoachService()
+        coach.events = [
+            .textChunk("ok"),
+            .action(.recordWorkout(WorkoutProposal(date: Date(), exerciseType: .run))),
+        ]
+        await store.send("record it", coach: coach, context: context())
+        #expect(!store.messages.isEmpty)
+        #expect(store.hasAttachedContext)
+
+        store.clear()
+
+        #expect(store.messages.isEmpty)
+        #expect(store.pendingProposals.isEmpty)
+        #expect(store.errorMessage == nil)
+        #expect(!store.hasAttachedContext, "the next question needs a fresh snapshot")
+        // Clearing is not unloading — the model stays ready.
+        #expect(store.modelPhase == .ready)
+    }
+
+    @Test func clearedConversationReattachesContextOnNextSend() async {
+        let store = await makeStore()
+        var coach = ScriptedCoachService()
+        coach.events = [.textChunk("ok")]
+        await store.send("first", coach: coach, context: context())
+        store.clear()
+
+        await store.send("fresh start", coach: coach, context: context())
+        #expect(coach.captured.request?.context != nil)
+    }
+
+    // MARK: entry-card preview
+
+    @Test func lastCoachReplyIsNilUntilTheCoachSpeaks() async {
+        let store = await makeStore()
+        #expect(store.lastCoachReply == nil)
+
+        var coach = ScriptedCoachService()
+        coach.events = [.textChunk("Looking strong.")]
+        await store.send("hi", coach: coach, context: context())
+        #expect(store.lastCoachReply == "Looking strong.")
+    }
+}
+
+// MARK: - Today Training Tests
+
+struct TodayTrainingTests {
+
+    private func makeDate(
+        year: Int = 2026, month: Int = 4, day: Int, hour: Int = 7, minute: Int = 0
+    ) -> Date {
+        var components = DateComponents()
+        components.year = year
+        components.month = month
+        components.day = day
+        components.hour = hour
+        components.minute = minute
+        return Calendar.current.date(from: components)!
+    }
+
+    private func makeExercise(
+        on date: Date,
+        name: String = "Run",
+        recorded: Bool = false
+    ) -> Exercise {
+        Exercise(
+            name: name,
+            type: .run,
+            durationSeconds: 1800,
+            distanceMiles: 3.0,
+            date: date,
+            workout: recorded
+                ? Workout(durationSeconds: 1800, distanceMiles: 3.0)
+                : nil
+        )
+    }
+
+    private func makeStrength(
+        name: String,
+        weekdayIndex: Int,
+        sortOrder: Int = 0,
+        offloaded: Bool = false
+    ) -> StrengthExercise {
+        StrengthExercise(
+            name: name,
+            weekdayIndex: weekdayIndex,
+            isOffloaded: offloaded,
+            sortOrder: sortOrder
+        )
+    }
+
+    // MARK: aerobic
+
+    @Test func aerobicReturnsOnlyTheGivenDay() {
+        let today = makeDate(day: 8)
+        let all = [
+            makeExercise(on: makeDate(day: 7), name: "Yesterday"),
+            makeExercise(on: today, name: "Today"),
+            makeExercise(on: makeDate(day: 9), name: "Tomorrow"),
+        ]
+        #expect(TodayTraining.aerobic(all, on: today).map(\.name) == ["Today"])
+    }
+
+    @Test func aerobicMatchesAcrossTheWholeCalendarDay() {
+        // A session at 23:59 is still today; midnight tomorrow is not.
+        let lateToday = makeDate(day: 8, hour: 23, minute: 59)
+        let midnightTomorrow = makeDate(day: 9, hour: 0, minute: 0)
+        let all = [
+            makeExercise(on: makeDate(day: 8, hour: 0), name: "Midnight"),
+            makeExercise(on: lateToday, name: "Late"),
+            makeExercise(on: midnightTomorrow, name: "Tomorrow"),
+        ]
+        let names = TodayTraining.aerobic(all, on: makeDate(day: 8, hour: 12)).map(\.name)
+        #expect(names == ["Midnight", "Late"])
+    }
+
+    @Test func aerobicPutsUnrecordedBeforeRecorded() {
+        let morning = makeDate(day: 8, hour: 6)
+        let evening = makeDate(day: 8, hour: 18)
+        let all = [
+            makeExercise(on: morning, name: "Recorded Morning", recorded: true),
+            makeExercise(on: evening, name: "Planned Evening"),
+        ]
+        // The actionable one leads even though it is later in the day.
+        #expect(TodayTraining.aerobic(all, on: morning).map(\.name)
+            == ["Planned Evening", "Recorded Morning"])
+    }
+
+    @Test func aerobicOrdersWithinEachGroupByTimeOfDay() {
+        let all = [
+            makeExercise(on: makeDate(day: 8, hour: 18), name: "Planned Late"),
+            makeExercise(on: makeDate(day: 8, hour: 6), name: "Planned Early"),
+            makeExercise(on: makeDate(day: 8, hour: 20), name: "Recorded Late", recorded: true),
+            makeExercise(on: makeDate(day: 8, hour: 8), name: "Recorded Early", recorded: true),
+        ]
+        #expect(TodayTraining.aerobic(all, on: makeDate(day: 8)).map(\.name) == [
+            "Planned Early", "Planned Late", "Recorded Early", "Recorded Late",
+        ])
+    }
+
+    @Test func aerobicIsEmptyForAnEmptyInput() {
+        #expect(TodayTraining.aerobic([], on: makeDate(day: 8)).isEmpty)
+    }
+
+    @Test func aerobicIsEmptyWhenNothingFallsOnTheDay() {
+        let all = [makeExercise(on: makeDate(day: 1))]
+        #expect(TodayTraining.aerobic(all, on: makeDate(day: 8)).isEmpty)
+    }
+
+    // MARK: strength
+
+    @Test func strengthReturnsTheDaysLaneInBoardOrder() {
+        // 2026-04-08 is a Wednesday → weekdayIndex 3.
+        let wednesday = makeDate(day: 8)
+        #expect(wednesday.weekdayIndex == 3)
+        let all = [
+            makeStrength(name: "Second", weekdayIndex: 3, sortOrder: 1),
+            makeStrength(name: "First", weekdayIndex: 3, sortOrder: 0),
+            makeStrength(name: "Other Day", weekdayIndex: 4, sortOrder: 0),
+        ]
+        #expect(TodayTraining.strength(all, on: wednesday).map(\.name) == ["First", "Second"])
+    }
+
+    @Test func strengthExcludesOffloadedExercises() {
+        let wednesday = makeDate(day: 8)
+        let all = [
+            makeStrength(name: "Active", weekdayIndex: 3, sortOrder: 0),
+            makeStrength(name: "Offloaded", weekdayIndex: 3, sortOrder: 1, offloaded: true),
+        ]
+        #expect(TodayTraining.strength(all, on: wednesday).map(\.name) == ["Active"])
+    }
+
+    @Test func strengthIgnoresTimeOfDay() {
+        let all = [makeStrength(name: "Bench", weekdayIndex: 3)]
+        for hour in [0, 12, 23] {
+            let day = makeDate(day: 8, hour: hour)
+            #expect(TodayTraining.strength(all, on: day).map(\.name) == ["Bench"])
+        }
+    }
+
+    @Test func strengthIsEmptyForAnEmptyInput() {
+        #expect(TodayTraining.strength([], on: makeDate(day: 8)).isEmpty)
+    }
+
+    @Test func strengthIsEmptyWhenTheLaneIsAnotherDay() {
+        let all = [makeStrength(name: "Monday Squat", weekdayIndex: 1)]
+        #expect(TodayTraining.strength(all, on: makeDate(day: 8)).isEmpty)
+    }
+
+    // MARK: emptiness
+
+    @Test func isEmptyOnlyWhenBothAreEmpty() {
+        let exercise = makeExercise(on: makeDate(day: 8))
+        let lift = makeStrength(name: "Bench", weekdayIndex: 3)
+        #expect(TodayTraining.isEmpty(aerobic: [], strength: []))
+        #expect(!TodayTraining.isEmpty(aerobic: [exercise], strength: []))
+        #expect(!TodayTraining.isEmpty(aerobic: [], strength: [lift]))
+        #expect(!TodayTraining.isEmpty(aerobic: [exercise], strength: [lift]))
+    }
+}

@@ -25,7 +25,7 @@ cd Evals && swift run CoachEval inspect --scenario high-rpe --prompt-mode chat
 ```
 
 ## Architecture
-- **No ViewModels** — `@Query` in top-level views only (`AerobicTrainingView`, `HistoryView`, `ContentView`). Child views receive data as `let` parameters.
+- **No ViewModels** — `@Query` in top-level views only (`HomeView`, `AerobicTrainingView`, `HistoryView`, `ContentView`). Child views receive data as `let` parameters. App-scope observable state that isn't a ViewModel (owns no queries, makes no view decisions) is a `@MainActor @Observable` service injected via `@Environment` — see `GoogleSheetsSyncCoordinator` and `CoachChatStore`.
 - **Models**: `Exercise` (planned), `Workout` (recorded), `AppConfiguration` (preferences), `ExerciseType` (enum)
 - **Distance storage**: Always miles internally. Display conversion via `Double.formattedDistance(metric:)`. Unit preference via `@Environment(\.useMetricUnits)`.
 - **Week start**: Monthly calendar grids are always Sunday-first — standard `Calendar.current` week (see `Date+Week.swift`). The user's `AppConfiguration.weekStartDay` (1=Sun…7=Sat, injected via `@Environment(\.weekStartDay)`) governs (a) weekly *aggregation* (mileage buckets, "This Week" stats — threaded into `WorkoutAggregations` as `firstWeekday`) and (b) the Aerobic Training *weekly* calendar: its day ordering, week boundaries, navigation, and header mileage totals use the `firstWeekday:` variants (`daysInWeek(firstWeekday:)`, `startOfWeek(firstWeekday:)`, `endOfWeek(firstWeekday:)`) so the topmost swimlane is the configured week start. The no-arg Sunday-first helpers remain for monthly views and must not change.
@@ -34,8 +34,9 @@ cd Evals && swift run CoachEval inspect --scenario high-rpe --prompt-mode chat
 - **Feeling and perceived exertion are two independent fields**, never one. `Workout.feeling` is 1–5 (Very Weak → Very Strong) and `Workout.perceivedExertion` is RPE 1–10; both are `Int?` with `nil` meaning "not recorded". The AI coach prompt emits each verbatim and omits it when `nil` — there is no inversion or derivation between them (there used to be, and it was wrong). Charts of feeling must plot `nil` as a **gap**, never as `0`.
 - **Enums in @Model classes** must be plain raw-value Codable enums (like `ExerciseType`). An enum with a custom `init(from:)` (e.g. `MuscleGroup`'s tolerant decode) makes SwiftData treat it as a composite Codable attribute and its encoder crashes on save — store the raw String instead and expose a computed enum property (see `StrengthExercise.muscleGroupRaw`, `Workout.source`).
 - **AICoachCore local package**: `Packages/AICoachCore/` — shared library containing prompt builder, coaching types (`CoachWorkout`, `CoachExercise`, `CoachingRequest`, `CoachingResponse`), formatters, and `GenerationConfig`. Used by both the iOS app and the `Evals/` CLI. The app converts SwiftData models to AICoachCore types via `CoachTypeConversions.swift`.
-- **AI Coach service layer**: `AICoachService` protocol with two implementations — `MLXAICoachService` (production, Gemma 3 4B via MLX-Swift) and `StubAICoachService` (previews/tests). Injected via `@Environment(\.aiCoach)`. Default environment value is the stub so previews never load real models. Uses `UserInput(chat:)` with separate system/user roles for proper Gemma 3 chat template formatting.
-- **AI model delivery**: Gemma 3 4B QAT 4-bit weights are **not bundled** — they download from Hugging Face on first use via `ModelConfiguration(id:)` and are cached locally for offline access.
+- **AI Coach service layer**: `AICoachService` protocol with two implementations — `MLXAICoachService` (production, Gemma 3 4B via MLX-Swift) and `StubAICoachService` (previews/tests/UI tests). Injected via `@Environment(\.aiCoach)`. Default environment value is the stub so previews never load real models. Uses `UserInput(chat:)` with separate system/user roles for proper Gemma 3 chat template formatting. The app root injects the stub under `-uiTestSeed` so UI tests never trigger the model download.
+- **The coach is tool-calling.** `streamChat` yields `CoachEvent`s (`.textChunk` / `.action` / `.rejectedToolCall`), mirroring the runtime's `Generation` cases so no app code outside `Services/AICoach/` imports MLX. Three tools live in `CoachToolSchemas`: `chat`, `suggest_schedule_change`, `record_workout`. **The mutating tools propose, never write** — a tool call becomes a pending proposal the athlete accepts, applied via `CoachProposalApplier` (schedule changes) or a pre-filled `RecordWorkoutSheet` (workouts). Decode and validate through `CoachToolDecoder`, **not** the runtime's `ToolCall.execute(with:)`, whose hardcoded `JSONDecoder` can't parse a model-emitted `"2026-04-06"`. Out-of-range ratings are rejected, never clamped.
+- **AI model delivery**: Gemma 3 4B QAT 4-bit weights are **not bundled** — they download from Hugging Face on first use and are cached locally for offline access. mlx-swift-lm 3.x dropped its bundled Hub integration, so `Services/AICoach/MLXModelLoading.swift` supplies the `Downloader` / `TokenizerLoader` conformances over swift-transformers' `HubApi` and `AutoTokenizer`, plus an adapter bridging its `Tokenizer` to `MLXLMCommon`'s own copy. `ModelConfiguration.toolCallFormat` must match the model family (`.gemma` today, `.gemma4` after a Gemma 4 swap).
 - **Conditional compilation**: All MLX-specific code is gated behind `#if canImport(MLXLLM)`. The `#else` branches throw `AICoachError.notImplemented` so the app compiles on simulators/CI without the SPM dependency resolved.
 - **Google Sheets Sync**: `GoogleSheetsSyncCoordinator` (`@MainActor @Observable`) debounces workout mutations and exports via the `GoogleSheetsAPI` protocol (`LiveGoogleSheetsAPI` uses GoogleSignIn-iOS + URLSession behind `#if canImport(GoogleSignIn)`; `StubGoogleSheetsAPI` for previews/tests). Injected via `@Environment(\.googleSheetsSync)`. Uses the **`auth/drive.file` scope** (per-file access only — non-sensitive, no Google verification needed); never `auth/spreadsheets`. OAuth client + Info.plist setup is documented in README.
 
@@ -72,6 +73,7 @@ Extensions/      Date+Week, Double+Distance (distance, duration, pace formatting
 Services/
   AICoach/       Protocol, MLX implementation, stub, type conversions
 Views/
+  Home/             Home tab (today's training, quick record, coach chat)
   AerobicTraining/  Training tab
   History/          History tab (calendar, workout list, detail sheet)
   Strength/         Strength tab
@@ -89,10 +91,19 @@ Views/
 - `Models/ExerciseType.swift` — exercise type enum with icons and colors
 - `Models/ExerciseSeriesSpec.swift` — Codable spec for a recurring exercise series (cadence, inclusive end date, every-N-occurrences progression)
 - `Services/ExercisePlanner/SeriesGenerator.swift` — pure spec → dated occurrences expansion (monthly anchored to start date, 400-occurrence cap)
-- `Services/ExercisePlanner/ExercisePlanner.swift` — bulk CRUD for series-tagged exercises (`seriesID`); the single mutation surface intended for future AI-coach tool calls. Recurring plans are eager bulk inserts of concrete `Exercise` rows — there are no templates or virtual instances.
+- `Services/ExercisePlanner/ExercisePlanner.swift` — bulk CRUD for series-tagged exercises (`seriesID`). Scoped to *series* mutations; a coach proposal targets one session on one day and so mutates it directly via `CoachProposalApplier` (which calls `detach` before removing a series member). Recurring plans are eager bulk inserts of concrete `Exercise` rows — there are no templates or virtual instances.
 - `Services/AICoach/AICoachService.swift` — protocol + `AICoachError` enum
 - `Services/AICoach/MLXAICoachService.swift` — production coach; swap model via `modelID` constant
-- `Services/AICoach/CoachTypeConversions.swift` — SwiftData → AICoachCore type bridge
+- `Services/AICoach/MLXModelLoading.swift` — Hugging Face downloader, tokenizer loader, and tokenizer adapter for mlx-swift-lm 3.x
+- `Services/AICoach/CoachChatStore.swift` — ephemeral (session-scoped) conversation state; `@Environment(\.coachChat)`
+- `Services/AICoach/CoachProposalApplier.swift` — applies accepted proposals; typed failures, no invented sessions (unit-tested)
+- `Services/AICoach/CoachTypeConversions.swift` — SwiftData ↔ AICoachCore type bridge
+- `Packages/AICoachCore/Sources/AICoachCore/CoachTools.swift` — tool vocabulary + proposal payloads
+- `Packages/AICoachCore/Sources/AICoachCore/CoachToolSchemas.swift` — JSON schemas (no MLX import)
+- `Packages/AICoachCore/Sources/AICoachCore/CoachToolDecoding.swift` — validating decoder for raw tool calls
+- `Views/Home/HomeView.swift` — Home tab; owns the queries and builds the coach's training snapshot
+- `Views/Home/TodayTraining.swift` — pure day selection for Home (unit-tested)
+- `Views/Home/CoachChatView.swift` — the conversation: bubbles, composer, proposal cards
 - `Services/GoogleSheetsSync/GoogleSheetsSyncCoordinator.swift` — debounce + lifecycle + `GoogleSheetsSyncStatus` enum
 - `Services/GoogleSheetsSync/GoogleSheetsAPI.swift` — protocol + Live (GoogleSignIn + URLSession) + Stub implementations
 - `Views/Shared/WorkoutFormFields.swift` — reusable workout form sections shared by `RecordWorkoutSheet` (create) and `WorkoutDetailSheet` (edit)

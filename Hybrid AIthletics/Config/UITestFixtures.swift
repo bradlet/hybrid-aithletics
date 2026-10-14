@@ -18,10 +18,15 @@ enum UITestFixtures {
     /// enough to exercise pagination boundaries and last-page-clamp on delete.
     static let workoutCount = 25
 
+    /// Number of strength exercises seeded into today's lane. Two is enough
+    /// for the Home tab's "which lift?" picker to appear.
+    static let todayStrengthCount = 2
+
     /// Clears any existing exercises in the context and inserts fresh
     /// fixtures. The most recent recorded exercise is "Test Workout 1" (today)
     /// and the oldest is "Test Workout 25" (24 days ago); two additional
-    /// planned-only exercises (no `workout`) seed the training calendar.
+    /// planned-only exercises (no `workout`) seed the training calendar, and
+    /// the strength board gets today's lane plus one other day.
     static func seed(into container: ModelContainer) {
         let context = container.mainContext
 
@@ -29,6 +34,11 @@ enum UITestFixtures {
         // is safe because seeding only runs under `-uiTestSeed`, which also
         // forces an in-memory preview container.
         if let existing = try? context.fetch(FetchDescriptor<Exercise>()) {
+            for exercise in existing {
+                context.delete(exercise)
+            }
+        }
+        if let existing = try? context.fetch(FetchDescriptor<StrengthExercise>()) {
             for exercise in existing {
                 context.delete(exercise)
             }
@@ -104,6 +114,43 @@ enum UITestFixtures {
         )
         context.insert(concreteExercise)
 
+        seedStrength(into: context)
+
         try? context.save()
+    }
+
+    /// Seeds the strength board: `todayStrengthCount` exercises in today's
+    /// lane, one offloaded (so Home's exclusion of offloaded work is
+    /// exercised), and one on another day.
+    private static func seedStrength(into context: ModelContext) {
+        let today = Date().weekdayIndex
+        let otherDay = (today + 1) % 7
+
+        for index in 0..<todayStrengthCount {
+            let exercise = StrengthExercise(
+                name: "Test Lift \(index + 1)",
+                muscleGroup: index == 0 ? .chest : .back,
+                weekdayIndex: today,
+                sortOrder: index,
+                plannedSets: 3,
+                plannedReps: 8 + index
+            )
+            context.insert(exercise)
+        }
+
+        context.insert(StrengthExercise(
+            name: "Test Offloaded Lift",
+            muscleGroup: .quads,
+            weekdayIndex: today,
+            isOffloaded: true,
+            sortOrder: 0
+        ))
+
+        context.insert(StrengthExercise(
+            name: "Test Other Day Lift",
+            muscleGroup: .shoulders,
+            weekdayIndex: otherDay,
+            sortOrder: 0
+        ))
     }
 }

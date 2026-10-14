@@ -23,6 +23,12 @@ struct RecordWorkoutSheet: View {
     let exercise: Exercise?
     /// The default date for the workout (used when exercise is nil).
     let defaultDate: Date
+    /// Values proposed by the AI coach, or nil for a normal entry.
+    ///
+    /// A coach proposal never writes straight through — it populates this form
+    /// so the athlete confirms the numbers the coach heard before anything
+    /// lands in their history.
+    var prefill: CoachProposalApplier.WorkoutPrefill? = nil
 
     @State private var name = ""
     @State private var type: ExerciseType = .run
@@ -83,6 +89,10 @@ struct RecordWorkoutSheet: View {
 
     /// Pre-fills form fields from the source exercise template or defaults.
     private func populateFields() {
+        if let prefill {
+            populate(from: prefill)
+            return
+        }
         if let exercise {
             name = exercise.name
             type = exercise.type
@@ -102,6 +112,27 @@ struct RecordWorkoutSheet: View {
             previousType = type
         }
         workoutDate = defaultDate
+    }
+
+    /// Fills the form from a coach proposal.
+    ///
+    /// Unstated values stay unset: `feeling` and `perceivedExertion` are
+    /// independent, and a nil must arrive at the dials as "not recorded"
+    /// rather than as a number the athlete never gave.
+    private func populate(from prefill: CoachProposalApplier.WorkoutPrefill) {
+        name = prefill.name
+        type = prefill.type
+        previousType = prefill.type
+        hours = prefill.durationSeconds / 3600
+        minutes = (prefill.durationSeconds % 3600) / 60
+        seconds = prefill.durationSeconds % 60
+        if let miles = prefill.distanceMiles, miles > 0 {
+            distance = useMetricUnits ? miles.toDisplayDistance(metric: true) : miles
+        }
+        notes = prefill.notes
+        feeling = prefill.feeling
+        perceivedExertion = prefill.perceivedExertion
+        workoutDate = prefill.date
     }
 
     /// Records the workout. When recording a planned exercise, its planned

@@ -5545,3 +5545,346 @@ struct StrengthPlanDraftTests {
         #expect(StrengthPlanDraft.repsRange == 1...100)
     }
 }
+
+// MARK: - Coach Proposal Applier Tests
+
+struct CoachProposalApplierTests {
+
+    private func makeContext() throws -> ModelContext {
+        let container = ModelContainerFactory.makePreviewContainer()
+        return ModelContext(container)
+    }
+
+    private func makeDate(year: Int = 2026, month: Int = 4, day: Int) -> Date {
+        var components = DateComponents()
+        components.year = year
+        components.month = month
+        components.day = day
+        components.hour = 7
+        return Calendar.current.date(from: components)!
+    }
+
+    @discardableResult
+    private func insertExercise(
+        on date: Date,
+        type: ExerciseType = .run,
+        name: String? = nil,
+        distanceMiles: Double = 5.0,
+        durationSeconds: Int = 2400,
+        seriesID: UUID? = nil,
+        workout: Workout? = nil,
+        in context: ModelContext
+    ) -> Exercise {
+        let exercise = Exercise(
+            name: name ?? type.rawValue,
+            type: type,
+            durationSeconds: durationSeconds,
+            distanceMiles: distanceMiles,
+            date: date,
+            seriesID: seriesID,
+            workout: workout
+        )
+        context.insert(exercise)
+        return exercise
+    }
+
+    private func proposal(
+        on date: Date,
+        kind: ScheduleChangeKind,
+        distanceMiles: Double? = nil,
+        durationSeconds: Int? = nil,
+        exerciseType: CoachExerciseType? = nil
+    ) -> ScheduleChangeProposal {
+        ScheduleChangeProposal(
+            date: date,
+            kind: kind,
+            distanceMiles: distanceMiles,
+            durationSeconds: durationSeconds,
+            exerciseType: exerciseType,
+            rationale: "because the coach said so"
+        )
+    }
+
+    // MARK: adjust_distance
+
+    @Test func adjustDistanceUpdatesThePlannedDistance() throws {
+        let context = try makeContext()
+        let day = makeDate(day: 8)
+        let exercise = insertExercise(on: day, distanceMiles: 6.0, in: context)
+
+        let result = try CoachProposalApplier.apply(
+            proposal(on: day, kind: .adjustDistance, distanceMiles: 4.0),
+            in: context
+        )
+
+        #expect(result?.id == exercise.id)
+        #expect(exercise.distanceMiles == 4.0)
+        #expect(exercise.durationSeconds == 2400, "duration should be untouched")
+    }
+
+    @Test func adjustDistanceMatchesByCalendarDayNotTimestamp() throws {
+        let context = try makeContext()
+        let scheduled = makeDate(day: 8)
+        let exercise = insertExercise(on: scheduled, in: context)
+        // Model-emitted dates land at midnight; the session is at 07:00.
+        let midnight = Calendar.current.startOfDay(for: scheduled)
+
+        try CoachProposalApplier.apply(
+            proposal(on: midnight, kind: .adjustDistance, distanceMiles: 3.0),
+            in: context
+        )
+
+        #expect(exercise.distanceMiles == 3.0)
+    }
+
+    // MARK: adjust_duration
+
+    @Test func adjustDurationUpdatesThePlannedDuration() throws {
+        let context = try makeContext()
+        let day = makeDate(day: 9)
+        let exercise = insertExercise(on: day, in: context)
+
+        try CoachProposalApplier.apply(
+            proposal(on: day, kind: .adjustDuration, durationSeconds: 1800),
+            in: context
+        )
+
+        #expect(exercise.durationSeconds == 1800)
+        #expect(exercise.distanceMiles == 5.0, "distance should be untouched")
+    }
+
+    // MARK: change_type
+
+    @Test func changeTypeUpdatesTheType() throws {
+        let context = try makeContext()
+        let day = makeDate(day: 10)
+        let exercise = insertExercise(on: day, type: .tempoRun, in: context)
+
+        try CoachProposalApplier.apply(
+            proposal(on: day, kind: .changeType, exerciseType: .recoveryRun),
+            in: context
+        )
+
+        #expect(exercise.type == .recoveryRun)
+    }
+
+    @Test func changeTypeRenamesOnlyADefaultName() throws {
+        let context = try makeContext()
+        let defaultNamed = insertExercise(on: makeDate(day: 11), type: .tempoRun, in: context)
+        let customNamed = insertExercise(
+            on: makeDate(day: 12), type: .tempoRun, name: "Race Simulation", in: context
+        )
+
+        try CoachProposalApplier.apply(
+            proposal(on: makeDate(day: 11), kind: .changeType, exerciseType: .easyRun),
+            in: context
+        )
+        try CoachProposalApplier.apply(
+            proposal(on: makeDate(day: 12), kind: .changeType, exerciseType: .easyRun),
+            in: context
+        )
+
+        #expect(defaultNamed.name == "Easy Run")
+        #expect(customNamed.name == "Race Simulation", "a deliberate name survives")
+    }
+
+    // MARK: remove
+
+    @Test func removeDeletesTheSession() throws {
+        let context = try makeContext()
+        let day = makeDate(day: 13)
+        insertExercise(on: day, in: context)
+
+        let result = try CoachProposalApplier.apply(
+            proposal(on: day, kind: .remove), in: context
+        )
+
+        #expect(result == nil)
+        let remaining = try context.fetch(FetchDescriptor<Exercise>())
+        #expect(remaining.isEmpty)
+    }
+
+    @Test func removeDetachesASeriesMemberFirst() throws {
+        let context = try makeContext()
+        let seriesID = UUID()
+        let day = makeDate(day: 14)
+        insertExercise(on: day, seriesID: seriesID, in: context)
+        let sibling = insertExercise(on: makeDate(day: 21), seriesID: seriesID, in: context)
+
+        try CoachProposalApplier.apply(proposal(on: day, kind: .remove), in: context)
+
+        // Removing one session must not read as a statement about the series.
+        #expect(sibling.seriesID == seriesID)
+        let remaining = try context.fetch(FetchDescriptor<Exercise>())
+        #expect(remaining.count == 1)
+        #expect(remaining.first?.id == sibling.id)
+    }
+
+    // MARK: add
+
+    @Test func addInsertsANewSession() throws {
+        let context = try makeContext()
+        let day = makeDate(day: 15)
+
+        let result = try CoachProposalApplier.apply(
+            proposal(
+                on: day,
+                kind: .add,
+                distanceMiles: 3.0,
+                durationSeconds: 1500,
+                exerciseType: .easyRun
+            ),
+            in: context
+        )
+
+        #expect(result != nil)
+        #expect(result?.type == .easyRun)
+        #expect(result?.name == "Easy Run")
+        #expect(result?.distanceMiles == 3.0)
+        #expect(result?.durationSeconds == 1500)
+        #expect(result?.isCompleted == false)
+        #expect(try context.fetch(FetchDescriptor<Exercise>()).count == 1)
+    }
+
+    @Test func addCarriesTheRationaleIntoNotes() throws {
+        let context = try makeContext()
+        let result = try CoachProposalApplier.apply(
+            proposal(on: makeDate(day: 16), kind: .add, exerciseType: .run),
+            in: context
+        )
+        #expect(result?.notes == "because the coach said so")
+    }
+
+    @Test func addRefusesADayThatIsAlreadyScheduled() throws {
+        let context = try makeContext()
+        let day = makeDate(day: 17)
+        insertExercise(on: day, in: context)
+
+        #expect(throws: CoachProposalApplier.Failure.dateAlreadyScheduled(day)) {
+            try CoachProposalApplier.apply(
+                proposal(on: day, kind: .add, exerciseType: .run), in: context
+            )
+        }
+        #expect(try context.fetch(FetchDescriptor<Exercise>()).count == 1)
+    }
+
+    // MARK: failures
+
+    @Test func missingSessionFailsAndMutatesNothing() throws {
+        let context = try makeContext()
+        insertExercise(on: makeDate(day: 8), in: context)
+        let emptyDay = makeDate(day: 20)
+
+        #expect(throws: CoachProposalApplier.Failure.noSessionOnDate(emptyDay)) {
+            try CoachProposalApplier.apply(
+                proposal(on: emptyDay, kind: .adjustDistance, distanceMiles: 2.0),
+                in: context
+            )
+        }
+        // Nothing invented, nothing touched.
+        let all = try context.fetch(FetchDescriptor<Exercise>())
+        #expect(all.count == 1)
+        #expect(all.first?.distanceMiles == 5.0)
+    }
+
+    @Test func ambiguousDayFailsRatherThanGuessing() throws {
+        let context = try makeContext()
+        let day = makeDate(day: 22)
+        insertExercise(on: day, distanceMiles: 5.0, in: context)
+        insertExercise(on: day, distanceMiles: 8.0, in: context)
+
+        #expect(throws: CoachProposalApplier.Failure.ambiguousDate(day, count: 2)) {
+            try CoachProposalApplier.apply(
+                proposal(on: day, kind: .adjustDistance, distanceMiles: 2.0),
+                in: context
+            )
+        }
+        let all = try context.fetch(FetchDescriptor<Exercise>())
+        #expect(all.allSatisfy { $0.distanceMiles != 2.0 })
+    }
+
+    @Test func recordedSessionIsNotReplanned() throws {
+        let context = try makeContext()
+        let day = makeDate(day: 23)
+        insertExercise(
+            on: day,
+            workout: Workout(durationSeconds: 2400, distanceMiles: 5.0),
+            in: context
+        )
+
+        #expect(throws: CoachProposalApplier.Failure.alreadyRecorded(day)) {
+            try CoachProposalApplier.apply(
+                proposal(on: day, kind: .adjustDistance, distanceMiles: 2.0),
+                in: context
+            )
+        }
+    }
+
+    @Test func removeKeepsRecordedHistory() throws {
+        let context = try makeContext()
+        let day = makeDate(day: 24)
+        insertExercise(
+            on: day,
+            workout: Workout(durationSeconds: 2400, distanceMiles: 5.0),
+            in: context
+        )
+
+        #expect(throws: CoachProposalApplier.Failure.alreadyRecorded(day)) {
+            try CoachProposalApplier.apply(proposal(on: day, kind: .remove), in: context)
+        }
+        #expect(try context.fetch(FetchDescriptor<Exercise>()).count == 1)
+    }
+
+    // MARK: workout prefill
+
+    @Test func prefillCarriesEveryStatedField() {
+        let day = makeDate(day: 25)
+        let prefill = CoachProposalApplier.prefill(from: WorkoutProposal(
+            date: day,
+            exerciseType: .tempoRun,
+            distanceMiles: 6.2,
+            durationSeconds: 2700,
+            perceivedExertion: 8,
+            feeling: 4,
+            notes: "held pace"
+        ))
+
+        #expect(prefill.name == "Tempo Run")
+        #expect(prefill.type == .tempoRun)
+        #expect(prefill.date == day)
+        #expect(prefill.distanceMiles == 6.2)
+        #expect(prefill.durationSeconds == 2700)
+        #expect(prefill.perceivedExertion == 8)
+        #expect(prefill.feeling == 4)
+        #expect(prefill.notes == "held pace")
+    }
+
+    @Test func prefillLeavesUnstatedRatingsUnset() {
+        let prefill = CoachProposalApplier.prefill(from: WorkoutProposal(
+            date: makeDate(day: 26),
+            exerciseType: .run
+        ))
+
+        // nil must survive to the form as "not recorded", never as a number
+        // the athlete did not give.
+        #expect(prefill.perceivedExertion == nil)
+        #expect(prefill.feeling == nil)
+        #expect(prefill.distanceMiles == nil)
+        #expect(prefill.durationSeconds == 0)
+        #expect(prefill.notes == "")
+    }
+
+    @Test func prefillKeepsRatingsIndependent() {
+        let exertionOnly = CoachProposalApplier.prefill(from: WorkoutProposal(
+            date: makeDate(day: 27), exerciseType: .run, perceivedExertion: 9
+        ))
+        let feelingOnly = CoachProposalApplier.prefill(from: WorkoutProposal(
+            date: makeDate(day: 27), exerciseType: .run, feeling: 2
+        ))
+
+        #expect(exertionOnly.perceivedExertion == 9)
+        #expect(exertionOnly.feeling == nil, "exertion must not imply a feeling")
+        #expect(feelingOnly.feeling == 2)
+        #expect(feelingOnly.perceivedExertion == nil, "feeling must not imply an exertion")
+    }
+}

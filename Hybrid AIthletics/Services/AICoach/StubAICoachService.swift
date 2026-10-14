@@ -39,6 +39,81 @@ struct StubAICoachService: AICoachService {
         CoachingResponse(narrative: narrative)
     }
 
+    /// Phrases that steer the stub toward a particular tool, so previews and
+    /// UI tests can drive each branch deterministically without a real model.
+    enum ChatTrigger {
+        /// Produces a `record_workout` proposal.
+        static let record = "record"
+        /// Produces a `suggest_schedule_change` proposal.
+        static let scheduleChange = "change my plan"
+        /// Produces a rejected tool call.
+        static let reject = "garble"
+    }
+
+    func streamChat(_ request: CoachChatRequest) -> AsyncThrowingStream<CoachEvent, Error> {
+        let lastUserTurn = request.messages.last { $0.role == .user }?.text ?? ""
+        let events = Self.events(for: lastUserTurn)
+        return AsyncThrowingStream { continuation in
+            Task {
+                for event in events {
+                    try? await Task.sleep(nanoseconds: 20_000_000) // 20ms
+                    continuation.yield(event)
+                }
+                continuation.finish()
+            }
+        }
+    }
+
+    /// Builds the canned event sequence for a user turn.
+    ///
+    /// Text is emitted in small chunks so streaming UIs exercise their typing
+    /// state, and the last user turn is echoed back so a test can assert which
+    /// turn was actually sent.
+    private static func events(for userTurn: String) -> [CoachEvent] {
+        let lowercased = userTurn.lowercased()
+        let today = Calendar.current.startOfDay(for: Date())
+
+        if lowercased.contains(ChatTrigger.reject) {
+            return [.rejectedToolCall(reason: "malformed_syntax")]
+        }
+        if lowercased.contains(ChatTrigger.record) {
+            return textChunks("Logging that now — here is what I have.") + [
+                .action(.recordWorkout(WorkoutProposal(
+                    date: today,
+                    exerciseType: .easyRun,
+                    distanceMiles: 5.0,
+                    durationSeconds: 2700,
+                    perceivedExertion: 4,
+                    feeling: nil,
+                    notes: nil
+                )))
+            ]
+        }
+        if lowercased.contains(ChatTrigger.scheduleChange) {
+            return textChunks("Here is the change I would make.") + [
+                .action(.suggestScheduleChange(ScheduleChangeProposal(
+                    date: today,
+                    kind: .adjustDistance,
+                    distanceMiles: 4.0,
+                    rationale: "Your recent RPE suggests backing off slightly."
+                )))
+            ]
+        }
+        return textChunks("You asked: \"\(userTurn)\". " + defaultNarrative)
+    }
+
+    /// Splits text into 24-character chunks, matching `streamSuggestion`.
+    private static func textChunks(_ text: String) -> [CoachEvent] {
+        var chunks: [CoachEvent] = []
+        var index = text.startIndex
+        while index < text.endIndex {
+            let end = text.index(index, offsetBy: 24, limitedBy: text.endIndex) ?? text.endIndex
+            chunks.append(.textChunk(String(text[index..<end])))
+            index = end
+        }
+        return chunks
+    }
+
     func streamSuggestion(_ request: CoachingRequest) -> AsyncThrowingStream<String, Error> {
         // Yield the canned text in small chunks so that streaming UIs can
         // exercise their typing/progress states against the stub.

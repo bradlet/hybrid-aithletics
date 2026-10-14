@@ -18,6 +18,19 @@ extension CoachExerciseType {
     }
 }
 
+extension ExerciseType {
+
+    /// Creates the app's UI-aware exercise type from a coaching type.
+    ///
+    /// The reverse of `CoachExerciseType(from:)`. Raw values are identical by
+    /// design, so an unknown value means the two enums have drifted apart —
+    /// fall back to `.other` rather than trapping on data that arrived from a
+    /// language model.
+    init(from coachType: CoachExerciseType) {
+        self = ExerciseType(rawValue: coachType.rawValue) ?? .other
+    }
+}
+
 extension CoachWorkout {
 
     /// Creates a coaching workout from a completed `Exercise` (one whose

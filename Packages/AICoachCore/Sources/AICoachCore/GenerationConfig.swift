@@ -46,6 +46,19 @@ public struct GenerationConfig: Codable, Sendable {
     /// The app's current production configuration.
     public static let production = GenerationConfig()
 
+    /// Conversational preset used by the chat coach.
+    ///
+    /// Roomier and warmer than `production`, which is tuned for a terse one-shot
+    /// bullet list: a conversation needs headroom for a reply plus a tool call,
+    /// and reads as stilted at 0.4. `repetitionPenalty` stays at 1.2 — the
+    /// degenerate looping this model falls into is real and not worth
+    /// rediscovering.
+    public static let chat = GenerationConfig(
+        maxTokens: 512,
+        temperature: 0.6,
+        topP: 0.95
+    )
+
     /// Experimental: lower repetition penalty — less needed with proper
     /// chat template formatting.
     public static let lowerRepPenalty = GenerationConfig(

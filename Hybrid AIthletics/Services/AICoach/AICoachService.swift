@@ -28,6 +28,14 @@ protocol AICoachService: Sendable {
     /// - Returns: An async stream yielding incremental text fragments.
     func streamSuggestion(_ request: CoachingRequest) -> AsyncThrowingStream<String, Error>
 
+    /// Streams the coach's next turn in a multi-turn conversation.
+    ///
+    /// Unlike `streamSuggestion`, the response may include tool calls, so the
+    /// stream yields `CoachEvent` values rather than plain text.
+    /// - Parameter request: The conversation so far, plus optional training context.
+    /// - Returns: An async stream of text chunks, decoded actions, and rejections.
+    func streamChat(_ request: CoachChatRequest) -> AsyncThrowingStream<CoachEvent, Error>
+
     /// Whether the model weights are already cached on disk.
     /// Returns `true` by default (stubs and test doubles always "have" their model).
     var isModelCached: Bool { get }

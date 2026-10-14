@@ -287,6 +287,50 @@ struct AICoachPromptBuilderTests {
         #expect(content.contains("felt strong"))
         #expect(content.contains("\"felt great\""))
     }
+
+    // MARK: - buildDataSections
+
+    @Test func dataSectionsIsPrefixOfUserContent() {
+        let request = CoachingRequest(
+            recentWorkouts: [
+                makeWorkout(date: Date(timeIntervalSince1970: 1_800_000_000), perceivedExertion: 6),
+                makeWorkout(date: Date(timeIntervalSince1970: 1_800_100_000), feeling: 2),
+            ],
+            upcomingExercises: [makeExercise(date: Date(timeIntervalSince1970: 1_800_200_000))],
+            useMetricUnits: false
+        )
+        let sections = AICoachPromptBuilder.buildDataSections(for: request)
+        let content = AICoachPromptBuilder.buildUserContent(for: request)
+        #expect(content.hasPrefix(sections))
+        #expect(content == sections + "\n" + AICoachPromptBuilder.closingQuestion)
+    }
+
+    @Test func dataSectionsOmitsClosingQuestion() {
+        let request = CoachingRequest(
+            recentWorkouts: [],
+            upcomingExercises: [],
+            useMetricUnits: false
+        )
+        let sections = AICoachPromptBuilder.buildDataSections(for: request)
+        #expect(!sections.contains(AICoachPromptBuilder.closingQuestion))
+        #expect(sections.contains("no workouts recorded"))
+        #expect(sections.contains("no upcoming exercises"))
+    }
+
+    @Test func dataSectionsRendersMetricAndImperial() {
+        let request = CoachingRequest(
+            recentWorkouts: [makeWorkout(date: Date(), distanceMiles: 5.0)],
+            upcomingExercises: [],
+            useMetricUnits: false
+        )
+        let metricRequest = CoachingRequest(
+            recentWorkouts: request.recentWorkouts,
+            upcomingExercises: [],
+            useMetricUnits: true
+        )
+        #expect(AICoachPromptBuilder.buildDataSections(for: request).contains("mi"))
+        #expect(AICoachPromptBuilder.buildDataSections(for: metricRequest).contains("km"))
+    }
 }
 
 // MARK: - Distance Formatting Tests
@@ -342,6 +386,16 @@ struct GenerationConfigTests {
         #expect(config.topP == 0.9)
         #expect(config.repetitionPenalty == 1.2)
         #expect(config.repetitionContextSize == 200)
+    }
+
+    @Test func chatPresetGivesMoreHeadroomThanProduction() {
+        let config = GenerationConfig.chat
+        #expect(config.maxTokens == 512)
+        #expect(config.temperature == 0.6)
+        #expect(config.topP == 0.95)
+        // The looping failure mode on this model is real; the penalty holds.
+        #expect(config.repetitionPenalty == GenerationConfig.production.repetitionPenalty)
+        #expect(config.maxTokens > GenerationConfig.production.maxTokens)
     }
 
     @Test func codableRoundTrip() throws {

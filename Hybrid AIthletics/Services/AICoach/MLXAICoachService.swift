@@ -49,9 +49,13 @@ final class MLXAICoachService: AICoachService, @unchecked Sendable {
     var onDownloadProgress: (@Sendable (Double) -> Void)?
 
     #if canImport(MLXLLM)
+    // `toolCallFormat` is what lets the runtime's GemmaFunctionParser recognize
+    // this model's `call:name{...}` tool-call syntax. Switching to a Gemma 4
+    // checkpoint means switching this to `.gemma4`.
     private let configuration = ModelConfiguration(
         id: MLXAICoachService.modelID,
-        extraEOSTokens: ["<end_of_turn>"]
+        extraEOSTokens: ["<end_of_turn>"],
+        toolCallFormat: .gemma
     )
 
     /// Cached model container — populated by `loadModel()` or lazily on first
@@ -140,6 +144,29 @@ final class MLXAICoachService: AICoachService, @unchecked Sendable {
         #endif
     }
 
+    func streamChat(_ request: CoachChatRequest) -> AsyncThrowingStream<CoachEvent, Error> {
+        #if canImport(MLXLLM)
+        return AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    try await self.generateStreamingChat(request: request) { event in
+                        continuation.yield(event)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+        #else
+        return AsyncThrowingStream { continuation in
+            continuation.finish(throwing: AICoachError.notImplemented(message:
+                "MLXAICoachService requires the MLX-Swift package. See file header."
+            ))
+        }
+        #endif
+    }
+
     // MARK: - MLX-backed generation (active once the SPM dep is added)
 
     #if canImport(MLXLLM)
@@ -153,12 +180,19 @@ final class MLXAICoachService: AICoachService, @unchecked Sendable {
 
     /// Returns configured generation parameters from `GenerationConfig`.
     private func makeParameters() -> GenerateParameters {
+        makeParameters(generationConfig)
+    }
+
+    /// Returns generation parameters for an explicit configuration, so the
+    /// conversational path can use `GenerationConfig.chat` without mutating
+    /// the service's one-shot default.
+    private func makeParameters(_ config: GenerationConfig) -> GenerateParameters {
         GenerateParameters(
-            maxTokens: generationConfig.maxTokens,
-            temperature: generationConfig.temperature,
-            topP: generationConfig.topP,
-            repetitionPenalty: generationConfig.repetitionPenalty,
-            repetitionContextSize: generationConfig.repetitionContextSize
+            maxTokens: config.maxTokens,
+            temperature: config.temperature,
+            topP: config.topP,
+            repetitionPenalty: config.repetitionPenalty,
+            repetitionContextSize: config.repetitionContextSize
         )
     }
 
@@ -194,6 +228,75 @@ final class MLXAICoachService: AICoachService, @unchecked Sendable {
                 }
             }
             return output
+        }
+    }
+
+    /// Conversational generation with tools enabled.
+    ///
+    /// Yields `CoachEvent`s so the caller never has to know about MLX's
+    /// `Generation` type. A tool call that fails validation becomes
+    /// `.rejectedToolCall` rather than throwing: one bad call should not
+    /// discard the turn's text, and the athlete is better served by "the coach
+    /// garbled that" than by silence.
+    private func generateStreamingChat(
+        request: CoachChatRequest,
+        onEvent: @escaping @Sendable (CoachEvent) -> Void
+    ) async throws {
+        let container = try await getContainer()
+        let parameters = makeParameters(.chat)
+        let turns = AICoachPromptBuilder.buildChatTurns(for: request)
+        let tools = CoachToolSchemas.all
+        // As in `generateStreaming`, the non-Sendable `UserInput` is built
+        // inside the closure so it isn't captured across the actor hop.
+        try await container.perform { context in
+            let userInput = UserInput(
+                chat: turns.map(Self.chatMessage(from:)),
+                tools: tools
+            )
+            let input = try await context.processor.prepare(input: userInput)
+            let stream = try MLXLMCommon.generate(
+                input: input,
+                parameters: parameters,
+                context: context,
+                tools: tools
+            )
+            for await event in stream {
+                switch event {
+                case .chunk(let text):
+                    onEvent(.textChunk(text))
+                case .toolCall(let call):
+                    onEvent(Self.coachEvent(from: call))
+                case .rejectedToolCall(let rejection):
+                    onEvent(.rejectedToolCall(reason: rejection.reason.rawValue))
+                default:
+                    // `.info` carries token counts and timings, and the enum is
+                    // not frozen — ignore anything that isn't content.
+                    break
+                }
+            }
+        }
+    }
+
+    /// Maps a conversation turn to the runtime's chat message type.
+    private static func chatMessage(from message: CoachMessage) -> Chat.Message {
+        switch message.role {
+        case .system: .system(message.text)
+        case .user: .user(message.text)
+        case .coach: .assistant(message.text)
+        }
+    }
+
+    /// Decodes and validates a raw tool call into a coach event.
+    private static func coachEvent(from call: ToolCall) -> CoachEvent {
+        let arguments = call.function.arguments.mapValues(\.anyValue)
+        do {
+            return .action(
+                try CoachToolDecoder.decode(name: call.function.name, arguments: arguments)
+            )
+        } catch let error as CoachToolDecodeError {
+            return .rejectedToolCall(reason: error.localizedDescription)
+        } catch {
+            return .rejectedToolCall(reason: error.localizedDescription)
         }
     }
 

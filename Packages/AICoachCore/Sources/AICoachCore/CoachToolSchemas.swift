@@ -98,6 +98,11 @@ public enum CoachToolSchemas {
             Propose recording a workout the athlete just told you they did. The \
             athlete reviews and confirms before anything is saved. Only fill in \
             fields they actually stated — omit the rest rather than guessing.
+
+            Call this only once the athlete has told you when they trained, what \
+            they did, and how far or how long. If any of those is still missing — \
+            "can you record a workout for me" gives you none of them — use the \
+            chat tool to ask instead of calling this with a guess.
             """,
             properties: [
                 "date": string("The day performed — \(dateFormatDescription(today: today))."),

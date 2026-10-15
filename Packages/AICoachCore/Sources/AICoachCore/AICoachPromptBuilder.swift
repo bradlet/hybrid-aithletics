@@ -129,6 +129,14 @@ public enum AICoachPromptBuilder {
         \(isoDate(yesterday)), and a weekday name means the nearest such day in the \
         direction the athlete is talking about. Never copy a date out of a tool \
         description or an example.
+        - Gather every value before you call a tool. record_workout needs the date, \
+        the activity type, and the distance or the duration; suggest_schedule_change \
+        needs the date of a session in the plan. If the athlete has not told you one \
+        of those — "can you record a workout for me" tells you none of them — answer \
+        with the chat tool and ask for what is missing. Never fill a tool argument \
+        with a guess.
+        - One tool call per reply. Once you have called a tool, stop — do not call it \
+        again or correct it with a second call.
         """
     }
 

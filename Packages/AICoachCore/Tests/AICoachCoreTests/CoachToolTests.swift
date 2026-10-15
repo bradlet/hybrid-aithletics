@@ -123,6 +123,12 @@ struct CoachToolSchemaTests {
         }
     }
 
+    @Test func recordWorkoutAsksTheModelToGatherFieldsFirst() {
+        let description = fn(recordWorkout)["description"] as! String
+        #expect(description.contains("chat tool"))
+        #expect(description.lowercased().contains("how far or how long"))
+    }
+
     @Test func recordWorkoutKeepsFeelingAndExertionSeparate() {
         let props = properties(recordWorkout)
         let exertion = (props["perceived_exertion"] as! [String: any Sendable])["description"] as! String
@@ -209,24 +215,50 @@ struct CoachToolDecoderTests {
     @Test func workoutOmitsUnstatedFields() throws {
         let action = try CoachToolDecoder.decode(
             name: "record_workout",
-            arguments: ["date": "2026-04-06", "exercise_type": "Run"]
+            arguments: ["date": "2026-04-06", "exercise_type": "Run", "distance_miles": 5.0]
         )
         guard case .recordWorkout(let proposal) = action else {
             Issue.record("expected a workout proposal")
             return
         }
-        #expect(proposal.distanceMiles == nil)
         #expect(proposal.durationSeconds == nil)
         #expect(proposal.perceivedExertion == nil)
         #expect(proposal.feeling == nil)
         #expect(proposal.notes == nil)
     }
 
+    @Test func workoutNeedsADistanceOrADuration() {
+        // "Can you record a workout for me" gives the model neither, and a
+        // proposal built from a guessed date is worse than a follow-up question.
+        #expect(throws: CoachToolDecodeError
+            .missingArgument("distance_miles or duration_seconds")) {
+            try CoachToolDecoder.decode(
+                name: "record_workout",
+                arguments: ["date": "2026-04-06", "exercise_type": "Run"]
+            )
+        }
+    }
+
+    @Test func workoutAcceptsEitherSizeAlone() throws {
+        for size in ["distance_miles", "duration_seconds"] {
+            let action = try CoachToolDecoder.decode(
+                name: "record_workout",
+                arguments: ["date": "2026-04-06", "exercise_type": "Run", size: 30]
+            )
+            guard case .recordWorkout = action else {
+                Issue.record("expected a workout proposal for \(size)")
+                return
+            }
+        }
+    }
+
     @Test func workoutKeepsFeelingAndExertionIndependent() throws {
         // All four combinations survive decoding without one implying the other.
         let combinations: [(Int?, Int?)] = [(nil, nil), (8, nil), (nil, 2), (8, 2)]
         for (exertion, feeling) in combinations {
-            var arguments: [String: Any] = ["date": "2026-04-06", "exercise_type": "Run"]
+            var arguments: [String: Any] = [
+                "date": "2026-04-06", "exercise_type": "Run", "distance_miles": 5.0,
+            ]
             if let exertion { arguments["perceived_exertion"] = exertion }
             if let feeling { arguments["feeling"] = feeling }
             let action = try CoachToolDecoder.decode(name: "record_workout", arguments: arguments)
@@ -263,7 +295,12 @@ struct CoachToolDecoderTests {
             #expect(throws: CoachToolDecodeError.self) {
                 try CoachToolDecoder.decode(
                     name: "record_workout",
-                    arguments: ["date": "2026-04-06", "exercise_type": "Run", key: value]
+                    arguments: [
+                        "date": "2026-04-06",
+                        "exercise_type": "Run",
+                        "distance_miles": 5.0,
+                        key: value,
+                    ]
                 )
             }
         }
@@ -511,6 +548,12 @@ struct CoachChatPromptTests {
         )
         #expect(laterPreamble != preamble)
         #expect(laterPreamble.contains("Today is 2026-10-15"))
+    }
+
+    @Test func chatPreambleRequiresFieldsBeforeAToolCall() {
+        #expect(preamble.contains("Gather every value before you call a tool"))
+        #expect(preamble.contains("record a workout for me"))
+        #expect(preamble.contains("One tool call per reply"))
     }
 
     @Test func systemTurnCarriesTheAnchorEvenWithoutContext() {

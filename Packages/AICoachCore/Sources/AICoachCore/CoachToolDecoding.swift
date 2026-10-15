@@ -117,7 +117,7 @@ public enum CoachToolDecoder {
         guard let type = try optionalExerciseType("exercise_type", in: arguments) else {
             throw CoachToolDecodeError.missingArgument("exercise_type")
         }
-        return WorkoutProposal(
+        let proposal = WorkoutProposal(
             date: try requiredDate("date", in: arguments),
             exerciseType: type,
             distanceMiles: try optionalDistance("distance_miles", in: arguments),
@@ -128,6 +128,15 @@ public enum CoachToolDecoder {
             feeling: try optionalRating("feeling", in: arguments, range: 1...5),
             notes: optionalString("notes", in: arguments)
         )
+        // A workout the athlete has not sized is not a workout they described.
+        // Without this, "can you record a workout for me" is enough for the
+        // model to call the tool, and the athlete is handed a pre-filled sheet
+        // built from a date it guessed. Rejecting sends the turn back to chat,
+        // where the coach asks what they actually did.
+        guard proposal.distanceMiles != nil || proposal.durationSeconds != nil else {
+            throw CoachToolDecodeError.missingArgument("distance_miles or duration_seconds")
+        }
+        return proposal
     }
 
     // MARK: - Field readers

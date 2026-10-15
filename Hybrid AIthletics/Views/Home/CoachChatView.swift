@@ -188,6 +188,13 @@ struct CoachChatView: View {
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
 
+            if let rate = Self.rateDescription(progress) {
+                Text(rate)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+
             Text("This only happens once. Leaving this screen won't cancel it.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
@@ -238,11 +245,38 @@ struct CoachChatView: View {
         return "\(done) of \(byteFormatter.string(fromByteCount: progress.totalBytes))"
     }
 
+    /// e.g. "3.4 MB/s — about 15 min left", or `nil` before a rate can be
+    /// measured.
+    ///
+    /// This is the line that answers "has it hung?". A 4.3 GB download over a
+    /// weak connection can spend minutes inside a single percent, and a bar
+    /// alone cannot distinguish that from a dead transfer.
+    static func rateDescription(_ progress: AICoachDownloadProgress) -> String? {
+        guard let rate = progress.bytesPerSecond, rate > 0 else { return nil }
+        var text = "\(byteFormatter.string(fromByteCount: Int64(rate)))/s"
+        if let remaining = progress.estimatedSecondsRemaining,
+           let formatted = remainingFormatter.string(from: remaining) {
+            text += " — about \(formatted) left"
+        }
+        return text
+    }
+
     /// Cached per project convention.
     static let byteFormatter: ByteCountFormatter = {
         let f = ByteCountFormatter()
         f.countStyle = .file
         f.allowedUnits = [.useMB, .useGB]
+        return f
+    }()
+
+    /// Cached per project convention. Coarse on purpose — a smoothed rate does
+    /// not justify advertising seconds.
+    static let remainingFormatter: DateComponentsFormatter = {
+        let f = DateComponentsFormatter()
+        f.allowedUnits = [.hour, .minute]
+        f.unitsStyle = .short
+        f.maximumUnitCount = 2
+        f.zeroFormattingBehavior = .dropAll
         return f
     }()
 

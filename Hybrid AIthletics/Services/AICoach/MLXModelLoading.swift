@@ -31,25 +31,32 @@ import Tokenizers
 /// without network access — which is what keeps the coach working offline after
 /// the first download.
 ///
-/// ## Why progress is measured from disk
+/// ## Why progress is assembled per file
 ///
 /// `HubApi.snapshot` reports a `Progress` whose children are weighted one unit
 /// per *file*, regardless of size. The coach model is a single 4.3 GB weights
 /// file beside nine files totalling ~33 MB, so that fraction reaches 90% within
-/// seconds and then sits there for the whole real download — a bar that moves
-/// but tells the user nothing.
+/// seconds and then crawls through the remaining 10% for the whole real
+/// download — a bar that lies about where it is.
 ///
-/// So this type ignores that fraction. It asks the Hub API for the size of every
-/// file it is about to fetch, then polls the repository directory (partial
-/// downloads land as `.incomplete` files inside it) and reports actual bytes on
-/// disk against that total. That is accurate, survives a resumed download — the
-/// bytes already present count immediately — and generalizes to sharded repos.
-/// If the size lookup fails, it falls back to forwarding `HubApi`'s own
-/// progress rather than showing nothing.
+/// Watching the filesystem instead does not work either, and this is worth
+/// recording because it looks like it should: the underlying transfer runs
+/// through `URLSession.download`, which streams into a file in the *system
+/// temporary directory* and only `moveItem`s it into the repository directory
+/// once the file is complete. A repo directory poll therefore shows the small
+/// files, nothing at all for minutes, then the full 4.3 GB at once.
+///
+/// What is accurate is the per-file fraction `HubApi` already computes from
+/// `URLSession`'s byte counts. So this type asks the Hub API for the size of
+/// every file it is about to fetch, then downloads them **one at a time** —
+/// each `snapshot` call matching a single filename, whose progress is that one
+/// file's true byte fraction — and weights each file's fraction by its real
+/// size. Files already cached resolve instantly and count immediately, so a
+/// resumed download starts part-way along. If the size lookup fails, it falls
+/// back to forwarding `HubApi`'s own progress rather than showing nothing.
+///
+/// Don't "simplify" this back into a single `snapshot` call over all patterns.
 struct HuggingFaceDownloader: Downloader {
-
-    /// How often the on-disk byte count is sampled during a download.
-    private static let pollInterval: Duration = .milliseconds(400)
 
     /// The Hub client used for snapshot downloads. `HubApi.shared` caches under
     /// the default `downloadBase`, which the cache check also reads.
@@ -66,7 +73,9 @@ struct HuggingFaceDownloader: Downloader {
     ///   - patterns: Glob patterns selecting which files to fetch.
     ///   - useLatest: Ignored — `HubApi` always prefers its cache when present,
     ///     which is the behavior the coach wants on a metered connection.
-    ///   - progressHandler: Called with download progress.
+    ///   - progressHandler: Called with byte-weighted download progress. The
+    ///     reported `Progress` carries a smoothed bytes-per-second rate under
+    ///     `ProgressUserInfoKey.throughputKey`.
     /// - Returns: The local directory holding the snapshot.
     func download(
         id: String,
@@ -76,13 +85,13 @@ struct HuggingFaceDownloader: Downloader {
         progressHandler: @Sendable @escaping (Progress) -> Void
     ) async throws -> URL {
         let repo = Hub.Repo(id: id)
-        let expectedBytes = await Self.expectedBytes(
+        let sizes = await Self.remoteFileSizes(
             repoID: id, revision: revision, matching: patterns
         )
 
-        // Without a known total there is nothing to weight against, so fall
-        // back to the Hub's own (file-count-weighted) progress.
-        guard expectedBytes > 0 else {
+        // Without known sizes there is nothing to weight against, so fall back
+        // to the Hub's own (file-count-weighted) progress.
+        guard !sizes.isEmpty else {
             return try await snapshot(
                 repo: repo,
                 revision: revision,
@@ -91,34 +100,45 @@ struct HuggingFaceDownloader: Downloader {
             )
         }
 
-        let directory = hub.localRepoLocation(repo)
-        let poller = Task {
-            while !Task.isCancelled {
-                // `discreteProgress` rather than `init(totalUnitCount:)`: the
-                // latter implicitly attaches to any ambient current progress,
-                // which would reparent these samples into someone else's tree.
-                let progress = Progress.discreteProgress(totalUnitCount: expectedBytes)
-                progress.completedUnitCount = min(
-                    Self.directorySize(at: directory), expectedBytes
-                )
-                progressHandler(progress)
-                try? await Task.sleep(for: Self.pollInterval)
+        let totalBytes = sizes.values.reduce(0, +)
+        let meter = ByteRateMeter()
+        let report: @Sendable (Int64) -> Void = { bytes in
+            let progress = Progress.discreteProgress(totalUnitCount: totalBytes)
+            progress.completedUnitCount = min(max(bytes, 0), totalBytes)
+            if let rate = meter.sample(bytes: progress.completedUnitCount) {
+                progress.setUserInfoObject(rate, forKey: .throughputKey)
             }
+            progressHandler(progress)
         }
-        defer { poller.cancel() }
 
-        // The Hub's own handler is dropped: reporting both would make the
-        // fraction jump between two different weightings.
-        let result = try await snapshot(
-            repo: repo, revision: revision, patterns: patterns, progressHandler: { _ in }
-        )
+        // Smallest first: the config and tokenizer files land in the first
+        // second, so the bar proves itself alive before the long haul, and a
+        // failure on the weights still leaves the cheap files cached.
+        let ordered = sizes.sorted { ($0.value, $0.key) < ($1.value, $1.key) }
+        var finishedBytes: Int64 = 0
+        report(0)
 
-        poller.cancel()
-        // Land on exactly 100% — the last poll almost certainly fired mid-write.
-        let finished = Progress.discreteProgress(totalUnitCount: expectedBytes)
-        finished.completedUnitCount = expectedBytes
-        progressHandler(finished)
-        return result
+        for (filename, size) in ordered {
+            let base = finishedBytes
+            _ = try await snapshot(
+                repo: repo,
+                revision: revision,
+                // A filename with no glob metacharacters matches only itself
+                // under the Hub's `fnmatch`, so this fetches exactly one file
+                // and its progress is that file's own byte fraction.
+                patterns: [filename],
+                progressHandler: { fileProgress in
+                    let within = Int64(
+                        (fileProgress.fractionCompleted * Double(size)).rounded()
+                    )
+                    report(base + within)
+                }
+            )
+            finishedBytes += size
+            report(finishedBytes)
+        }
+
+        return hub.localRepoLocation(repo)
     }
 
     /// Calls `HubApi.snapshot`, forwarding `revision` only when one was given.
@@ -141,13 +161,14 @@ struct HuggingFaceDownloader: Downloader {
 
     // MARK: - Size discovery
 
-    /// Total size of the repository files matching `patterns`, or `0` when the
-    /// lookup fails (offline, rate limited, private repo).
-    static func expectedBytes(
+    /// Size in bytes of every repository file matching `patterns`, keyed by
+    /// filename. Empty when the lookup fails (offline, rate limited, private
+    /// repo) or when no file both matches and reports a size.
+    static func remoteFileSizes(
         repoID: String,
         revision: String?,
         matching patterns: [String]
-    ) async -> Int64 {
+    ) async -> [String: Int64] {
         var components = URLComponents(
             string: "https://huggingface.co/api/models/\(repoID)"
         )
@@ -157,26 +178,27 @@ struct HuggingFaceDownloader: Downloader {
             )
         }
         components?.queryItems = [URLQueryItem(name: "blobs", value: "true")]
-        guard let url = components?.url else { return 0 }
+        guard let url = components?.url else { return [:] }
 
         do {
             let (data, response) = try await URLSession.shared.data(from: url)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return 0 }
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return [:] }
             guard
                 let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                 let siblings = json["siblings"] as? [[String: Any]]
-            else { return 0 }
+            else { return [:] }
 
-            return siblings.reduce(into: Int64(0)) { total, sibling in
+            return siblings.reduce(into: [String: Int64]()) { sizes, sibling in
                 guard
                     let name = sibling["rfilename"] as? String,
                     matches(name, patterns: patterns),
-                    let size = sibling["size"] as? NSNumber
+                    let size = sibling["size"] as? NSNumber,
+                    size.int64Value > 0
                 else { return }
-                total += size.int64Value
+                sizes[name] = size.int64Value
             }
         } catch {
-            return 0
+            return [:]
         }
     }
 
@@ -195,25 +217,65 @@ struct HuggingFaceDownloader: Downloader {
         }
         return false
     }
+}
 
-    /// Total bytes of every regular file under `directory`, including the
-    /// `.incomplete` partials the Hub writes while downloading.
-    static func directorySize(at directory: URL) -> Int64 {
-        guard let enumerator = FileManager.default.enumerator(
-            at: directory,
-            includingPropertiesForKeys: [.isRegularFileKey, .fileAllocatedSizeKey, .fileSizeKey],
-            options: []
-        ) else { return 0 }
+/// Smoothed download rate, in bytes per second.
+///
+/// Exists so the progress card can say *why* a download is taking four minutes
+/// instead of leaving the athlete to guess whether it has hung. Samples are
+/// exponentially smoothed because `URLSession` delivers byte counts in bursts,
+/// and a raw delta reads as wild oscillation.
+///
+/// A class with a lock rather than an actor: it is driven from whichever thread
+/// `URLSession` calls back on, inside a synchronous `@Sendable` closure that
+/// cannot await.
+final class ByteRateMeter: @unchecked Sendable {
 
-        var total: Int64 = 0
-        for case let url as URL in enumerator {
-            let values = try? url.resourceValues(
-                forKeys: [.isRegularFileKey, .fileSizeKey]
-            )
-            guard values?.isRegularFile == true, let size = values?.fileSize else { continue }
-            total += Int64(size)
+    /// Weight given to the newest sample. Low enough that one stalled interval
+    /// doesn't read as a stop.
+    private static let smoothing = 0.3
+
+    /// Minimum gap between samples. Below this the deltas are too small to
+    /// divide meaningfully.
+    private static let minimumInterval: TimeInterval = 0.3
+
+    /// Ceiling applied to a single sample, to absorb the step change when one
+    /// file finishes and the next begins.
+    private static let maximumRate: Double = 500 * 1024 * 1024
+
+    private let lock = NSLock()
+    private var lastBytes: Int64?
+    private var lastSampledAt: Date?
+    private var smoothed: Double?
+
+    /// Folds a cumulative byte count into the rate estimate.
+    /// - Parameter bytes: Total bytes transferred so far.
+    /// - Returns: The smoothed rate in bytes per second, or `nil` before enough
+    ///   time has passed to compute one.
+    func sample(bytes: Int64) -> Double? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let now = Date()
+        guard let previousBytes = lastBytes, let previousAt = lastSampledAt else {
+            lastBytes = bytes
+            lastSampledAt = now
+            return nil
         }
-        return total
+
+        let elapsed = now.timeIntervalSince(previousAt)
+        guard elapsed >= Self.minimumInterval else { return smoothed }
+
+        lastBytes = bytes
+        lastSampledAt = now
+
+        let instant = min(
+            max(Double(bytes - previousBytes) / elapsed, 0), Self.maximumRate
+        )
+        smoothed = smoothed.map {
+            $0 * (1 - Self.smoothing) + instant * Self.smoothing
+        } ?? instant
+        return smoothed
     }
 }
 
@@ -293,7 +355,10 @@ struct MLXTokenizerAdapter: MLXLMCommon.Tokenizer {
 /// `config.json` alone is not a sufficient marker: it is a few hundred bytes and
 /// lands within the first second of a 4.3 GB download, so an interrupted
 /// download would report itself as cached and then fail to load. This requires
-/// weights to be present *and* no `.incomplete` partial to be left behind.
+/// weights to be present — and a `.safetensors` file only appears here once it
+/// has transferred completely, since the Hub downloads into a temporary file
+/// and moves it into place at the end — *and* no `.incomplete` partial left
+/// behind by an older download.
 /// - Parameters:
 ///   - modelID: Hugging Face repository identifier.
 ///   - hub: The Hub client whose `downloadBase` to inspect.

@@ -80,7 +80,11 @@ final class StubAICoachService: AICoachService, @unchecked Sendable {
                 onDownloadProgress(
                     AICoachDownloadProgress(
                         completedBytes: min(completed, approximateDownloadBytes),
-                        totalBytes: approximateDownloadBytes
+                        totalBytes: approximateDownloadBytes,
+                        // A fixed plausible rate, so the progress card's rate
+                        // and time-remaining line renders in previews and UI
+                        // tests rather than only against a real network.
+                        bytesPerSecond: 12 * 1024 * 1024
                     )
                 )
             }

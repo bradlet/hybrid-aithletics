@@ -19,15 +19,27 @@ import AICoachCore
 /// a file-count-weighted bar reaches 90% within seconds and then appears stuck
 /// for the entire real download.
 struct AICoachDownloadProgress: Equatable, Sendable {
-    /// Bytes present on disk so far.
+    /// Bytes transferred so far.
     var completedBytes: Int64
     /// Total bytes expected, or 0 when not yet known.
     var totalBytes: Int64
+    /// Smoothed transfer rate in bytes per second, or `nil` before one can be
+    /// measured. Shown so a genuinely slow download reads as slow rather than
+    /// as hung.
+    var bytesPerSecond: Double? = nil
 
     /// Completed fraction in `0...1`, or `nil` when the total isn't known yet.
     var fraction: Double? {
         guard totalBytes > 0 else { return nil }
         return min(max(Double(completedBytes) / Double(totalBytes), 0), 1)
+    }
+
+    /// Seconds of download remaining at the current rate, or `nil` when either
+    /// the total or the rate is unknown, or the rate has collapsed to nothing
+    /// (where the estimate would be absurd rather than merely imprecise).
+    var estimatedSecondsRemaining: TimeInterval? {
+        guard totalBytes > 0, let rate = bytesPerSecond, rate > 1_024 else { return nil }
+        return Double(max(totalBytes - completedBytes, 0)) / rate
     }
 }
 

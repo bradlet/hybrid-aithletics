@@ -6593,6 +6593,54 @@ struct AICoachDownloadProgressTests {
         let progress = AICoachDownloadProgress(completedBytes: 1_200_000, totalBytes: 0)
         #expect(!CoachChatView.byteProgressDescription(progress).contains("of"))
     }
+
+    @Test func rateIsAbsentUntilOneHasBeenMeasured() {
+        let progress = AICoachDownloadProgress(
+            completedBytes: 1_000, totalBytes: 4_000
+        )
+        #expect(progress.bytesPerSecond == nil)
+        #expect(progress.estimatedSecondsRemaining == nil)
+        #expect(CoachChatView.rateDescription(progress) == nil)
+    }
+
+    @Test func remainingTimeIsRemainingBytesOverTheRate() {
+        let progress = AICoachDownloadProgress(
+            completedBytes: 1_000_000_000,
+            totalBytes: 5_000_000_000,
+            bytesPerSecond: 4_000_000
+        )
+        // 4 GB left at 4 MB/s = 1000 s.
+        #expect(progress.estimatedSecondsRemaining == 1_000)
+    }
+
+    @Test func remainingTimeIsSuppressedAtACollapsedRate() {
+        // At a few hundred bytes a second the estimate would read as days,
+        // which is noise rather than information.
+        let progress = AICoachDownloadProgress(
+            completedBytes: 1_000, totalBytes: 4_000_000_000, bytesPerSecond: 200
+        )
+        #expect(progress.estimatedSecondsRemaining == nil)
+    }
+
+    @Test func rateDescriptionNamesSpeedAndTimeRemaining() throws {
+        let progress = AICoachDownloadProgress(
+            completedBytes: 1_000_000_000,
+            totalBytes: 5_000_000_000,
+            bytesPerSecond: 4_000_000
+        )
+        let text = try #require(CoachChatView.rateDescription(progress))
+        #expect(text.contains("/s"))
+        #expect(text.contains("left"))
+    }
+
+    @Test func rateDescriptionOmitsTimeRemainingWithoutATotal() throws {
+        let progress = AICoachDownloadProgress(
+            completedBytes: 1_000_000, totalBytes: 0, bytesPerSecond: 4_000_000
+        )
+        let text = try #require(CoachChatView.rateDescription(progress))
+        #expect(text.contains("/s"))
+        #expect(!text.contains("left"))
+    }
 }
 
 // MARK: - Hugging Face Download Pattern Tests
@@ -6620,27 +6668,41 @@ struct HuggingFaceDownloadPatternTests {
         #expect(!HuggingFaceDownloader.matches("other.json", patterns: ["config.json"]))
     }
 
-    @Test func directorySizeSumsNestedFilesIncludingPartials() throws {
-        let root = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent(UUID().uuidString)
-        let nested = root
-            .appendingPathComponent(".cache/huggingface/download")
-        try FileManager.default.createDirectory(
-            at: nested, withIntermediateDirectories: true
-        )
-        defer { try? FileManager.default.removeItem(at: root) }
+}
 
-        try Data(count: 1_000).write(to: root.appendingPathComponent("config.json"))
-        // A partial download in the staging area must count toward progress.
-        try Data(count: 5_000)
-            .write(to: nested.appendingPathComponent("model.safetensors.abc.incomplete"))
+// MARK: - Byte Rate Meter Tests
 
-        #expect(HuggingFaceDownloader.directorySize(at: root) == 6_000)
+struct ByteRateMeterTests {
+
+    @Test func firstSampleHasNoRateYet() {
+        // One cumulative reading is not a rate; reporting 0 would read as a
+        // stalled download on the very first progress callback.
+        #expect(ByteRateMeter().sample(bytes: 1_000) == nil)
     }
 
-    @Test func directorySizeOfAMissingDirectoryIsZero() {
-        let missing = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent(UUID().uuidString)
-        #expect(HuggingFaceDownloader.directorySize(at: missing) == 0)
+    @Test func samplesTakenTooCloseTogetherHoldTheLastRate() {
+        let meter = ByteRateMeter()
+        _ = meter.sample(bytes: 0)
+        // URLSession delivers byte counts in bursts; dividing by a 1 ms gap
+        // would produce nonsense, so sub-interval samples are held.
+        #expect(meter.sample(bytes: 5_000) == nil)
+    }
+
+    @Test func measuresARateOnceEnoughTimeHasPassed() async throws {
+        let meter = ByteRateMeter()
+        _ = meter.sample(bytes: 0)
+        try await Task.sleep(for: .milliseconds(400))
+        let rate = try #require(meter.sample(bytes: 1_000_000))
+        // ~1 MB over ~0.4 s. Generous bounds: this is wall-clock timing.
+        #expect(rate > 500_000)
+        #expect(rate < 10_000_000)
+    }
+
+    @Test func rateIsNeverNegativeWhenTheByteCountDoesNotAdvance() async throws {
+        let meter = ByteRateMeter()
+        _ = meter.sample(bytes: 5_000)
+        try await Task.sleep(for: .milliseconds(400))
+        let rate = try #require(meter.sample(bytes: 5_000))
+        #expect(rate == 0)
     }
 }

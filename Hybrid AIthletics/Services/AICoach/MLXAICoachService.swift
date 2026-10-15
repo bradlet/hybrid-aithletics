@@ -129,7 +129,8 @@ final class MLXAICoachService: AICoachService, @unchecked Sendable {
             progressHandler?(
                 AICoachDownloadProgress(
                     completedBytes: progress.completedUnitCount,
-                    totalBytes: progress.totalUnitCount
+                    totalBytes: progress.totalUnitCount,
+                    bytesPerSecond: progress.userInfo[.throughputKey] as? Double
                 )
             )
         }

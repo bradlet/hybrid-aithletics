@@ -6252,6 +6252,47 @@ struct CoachChatStoreTests {
         #expect(store.pendingProposals.count == 1)
     }
 
+    @Test func onlyTheFirstProposalOfATurnIsKept() async {
+        // A small model routinely emits the same call two or three times in one
+        // pass, each slightly different. Overwriting made the proposal card
+        // rewrite itself and left the athlete approving whichever landed last.
+        let store = await makeStore()
+        let first = WorkoutProposal(date: Date(), exerciseType: .easyRun, distanceMiles: 5)
+        let second = WorkoutProposal(date: Date(), exerciseType: .tempoRun, distanceMiles: 8)
+        var coach = ScriptedCoachService()
+        coach.events = [
+            .action(.recordWorkout(first)),
+            .action(.recordWorkout(second)),
+            .action(.suggestScheduleChange(ScheduleChangeProposal(
+                date: Date(), kind: .remove, rationale: "and this too"
+            ))),
+        ]
+
+        await store.send("I ran 5 miles", coach: coach, context: context())
+
+        let id = store.messages.last { $0.role == .coach }!.id
+        #expect(store.proposal(for: id) == .recordWorkout(first))
+        #expect(store.pendingProposals.count == 1)
+    }
+
+    @Test func textAfterADuplicateCallStillReachesTheBubble() async {
+        // Dropping the extra call must not drop the turn's prose with it.
+        let store = await makeStore()
+        let proposal = WorkoutProposal(date: Date(), exerciseType: .run, distanceMiles: 3)
+        var coach = ScriptedCoachService()
+        coach.events = [
+            .action(.recordWorkout(proposal)),
+            .action(.recordWorkout(proposal)),
+            .action(.reply("Nice work.")),
+        ]
+
+        await store.send("I ran 3 miles", coach: coach, context: context())
+
+        let coachTurn = store.messages.last { $0.role == .coach }!
+        #expect(coachTurn.text.contains("Nice work."))
+        #expect(store.proposal(for: coachTurn.id) == .recordWorkout(proposal))
+    }
+
     @Test func resolvingAProposalClearsIt() async {
         let store = await makeStore()
         var coach = ScriptedCoachService()

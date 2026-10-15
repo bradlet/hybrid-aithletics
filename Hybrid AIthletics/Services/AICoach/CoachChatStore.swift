@@ -242,12 +242,22 @@ final class CoachChatStore {
                 case .action(.reply(let text)):
                     append(text, to: coachTurnID)
                 case .action(let action):
+                    // First proposal of the turn wins. A small model routinely
+                    // emits the same call two or three times in one pass, each
+                    // slightly different; overwriting made the proposal card
+                    // visibly rewrite itself and left the athlete approving
+                    // whichever version happened to land last.
+                    guard pendingProposals[coachTurnID] == nil else { continue }
                     pendingProposals[coachTurnID] = action
                 case .rejectedToolCall(let reason):
                     // Surfaced rather than swallowed: silence would be
                     // indistinguishable from the coach having nothing to say.
+                    // Phrased as a request rather than a failure because the
+                    // common rejection is a call made before the athlete had
+                    // given every value — the recovery is them filling it in.
                     append(
-                        "\n\n_I tried to suggest something there but garbled it (\(reason))._",
+                        "\n\n_I started to suggest something there but didn\'t have "
+                            + "it right (\(reason)) — could you tell me the details again?_",
                         to: coachTurnID
                     )
                 }

@@ -12,10 +12,10 @@
 		1C9E36BB2FA2550C0022393D /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 1C9E36BA2FA2550C0022393D /* GoogleSignInSwift */; };
 		1CCF39D82F88A594009D4D21 /* AICoachCore in Frameworks */ = {isa = PBXBuildFile; productRef = AA0001032FA6B00000000001 /* AICoachCore */; };
 		1CD325422F849D6D00F2A1B5 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = 1CD325412F849D6D00F2A1B5 /* MLXLLM */; };
-		BB0002032FB0C00000000001 /* Hub in Frameworks */ = {isa = PBXBuildFile; productRef = BB0002012FB0C00000000001 /* Hub */; };
-		BB0002042FB0C00000000001 /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = BB0002022FB0C00000000001 /* Tokenizers */; };
 		1CD325442F849D6D00F2A1B5 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = 1CD325432F849D6D00F2A1B5 /* MLXLMCommon */; };
 		AA0001012FA6B00000000001 /* AICoachCore in Frameworks */ = {isa = PBXBuildFile; productRef = AA0001022FA6B00000000001 /* AICoachCore */; };
+		BB0002032FB0C00000000001 /* Hub in Frameworks */ = {isa = PBXBuildFile; productRef = BB0002012FB0C00000000001 /* Hub */; };
+		BB0002042FB0C00000000001 /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = BB0002022FB0C00000000001 /* Tokenizers */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -336,12 +336,13 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = "Hybrid AIthletics/Hybrid_AIthletics.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 13;
 				DEVELOPMENT_TEAM = CB9HS9S84R;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Hybrid AIthletics/Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Hybrid AIthletics";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Hybrid AIthletics reads your workout history to track exercises and provide personalized AI coaching insights.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Hybrid AIthletics does not write data to Apple Health.";
@@ -354,7 +355,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.8.0;
+				MARKETING_VERSION = 0.9.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "bradlet.Hybrid-AIthletics";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -374,12 +375,13 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = "Hybrid AIthletics/Hybrid_AIthletics.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 13;
 				DEVELOPMENT_TEAM = CB9HS9S84R;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Hybrid AIthletics/Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Hybrid AIthletics";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Hybrid AIthletics reads your workout history to track exercises and provide personalized AI coaching insights.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Hybrid AIthletics does not write data to Apple Health.";
@@ -392,7 +394,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.8.0;
+				MARKETING_VERSION = 0.9.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "bradlet.Hybrid-AIthletics";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -665,20 +667,20 @@
 				minimumVersion = 9.1.0;
 			};
 		};
-		BB0002002FB0C00000000001 /* XCRemoteSwiftPackageReference "swift-transformers" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/huggingface/swift-transformers";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.3.5;
-			};
-		};
 		1CD325402F849D6D00F2A1B5 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/ml-explore/mlx-swift-lm";
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 3.32.3;
+			};
+		};
+		BB0002002FB0C00000000001 /* XCRemoteSwiftPackageReference "swift-transformers" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/huggingface/swift-transformers";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.3.5;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
@@ -693,16 +695,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 1C9E36B62FA24CDB0022393D /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
 			productName = GoogleSignInSwift;
-		};
-		BB0002012FB0C00000000001 /* Hub */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = BB0002002FB0C00000000001 /* XCRemoteSwiftPackageReference "swift-transformers" */;
-			productName = Hub;
-		};
-		BB0002022FB0C00000000001 /* Tokenizers */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = BB0002002FB0C00000000001 /* XCRemoteSwiftPackageReference "swift-transformers" */;
-			productName = Tokenizers;
 		};
 		1CD325412F849D6D00F2A1B5 /* MLXLLM */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -721,6 +713,16 @@
 		AA0001032FA6B00000000001 /* AICoachCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = AICoachCore;
+		};
+		BB0002012FB0C00000000001 /* Hub */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BB0002002FB0C00000000001 /* XCRemoteSwiftPackageReference "swift-transformers" */;
+			productName = Hub;
+		};
+		BB0002022FB0C00000000001 /* Tokenizers */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BB0002002FB0C00000000001 /* XCRemoteSwiftPackageReference "swift-transformers" */;
+			productName = Tokenizers;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

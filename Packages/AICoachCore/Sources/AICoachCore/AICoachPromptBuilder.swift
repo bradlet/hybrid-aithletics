@@ -39,6 +39,54 @@ public enum AICoachPromptBuilder {
     - Keep the total response under 200 words. Do not repeat yourself.
     """
 
+    /// Formats a date as the model should both read and emit it.
+    private static let isoDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return f
+    }()
+
+    /// Formats a date with its weekday spelled out, for the "today is" anchor.
+    private static let anchorDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd EEEE"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return f
+    }()
+
+    /// `YYYY-MM-DD` rendering of a date, matching what `CoachToolDecoder` parses.
+    ///
+    /// - Parameter date: The date to format.
+    /// - Returns: e.g. `"2026-10-14"`.
+    public static func isoDate(_ date: Date) -> String {
+        isoDateFormatter.string(from: date)
+    }
+
+    /// The calendar anchor given to the model on every conversational turn.
+    ///
+    /// A model has no clock: with nothing anchoring "today" it fills a tool
+    /// call's `date` from whatever date it last saw — in practice the example
+    /// date out of a tool description — so every recorded workout landed
+    /// months away. Stating today, yesterday and the coming week explicitly,
+    /// and in the exact format the decoder parses, is what makes "I ran this
+    /// morning" resolvable.
+    ///
+    /// - Parameters:
+    ///   - today: The current date.
+    ///   - calendar: Calendar used for the relative days. Defaults to `.current`.
+    /// - Returns: One sentence naming today, yesterday and tomorrow.
+    public static func dateAnchor(today: Date, calendar: Calendar = .current) -> String {
+        let startOfToday = calendar.startOfDay(for: today)
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: startOfToday) ?? startOfToday
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: startOfToday) ?? startOfToday
+        return """
+        Today is \(anchorDateFormatter.string(from: startOfToday)). \
+        Yesterday was \(anchorDateFormatter.string(from: yesterday)) and \
+        tomorrow is \(anchorDateFormatter.string(from: tomorrow)).
+        """
+    }
+
     /// System preamble for tool-enabled conversation.
     ///
     /// Deliberately not a reuse of `systemPreamble`: that one mandates "3–5
@@ -46,16 +94,43 @@ public enum AICoachPromptBuilder {
     /// wrong for tool selection. This keeps the persona and the two load-reading
     /// rules, and adds the guidance a small model needs to not reach for a tool
     /// on every turn.
-    public static let chatSystemPreamble: String = """
-    You are an experienced competitive running coach talking with your athlete.
+    ///
+    /// Takes `today` rather than reading the clock so the anchor is testable and
+    /// so it is recomputed per turn — a conversation left open overnight would
+    /// otherwise keep resolving "today" to the day it started.
+    ///
+    /// - Parameters:
+    ///   - today: The current date, used for the calendar anchor.
+    ///   - calendar: Calendar used for the relative days. Defaults to `.current`.
+    /// - Returns: The system turn text for a conversational request.
+    public static func chatSystemPreamble(
+        today: Date,
+        calendar: Calendar = .current
+    ) -> String {
+        let startOfToday = calendar.startOfDay(for: today)
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: startOfToday) ?? startOfToday
+        return """
+        You are an experienced competitive running coach talking with your athlete.
 
-    Rules:
-    - ONLY reference workouts and sessions listed in the conversation.
-    - Perceived exertion (RPE, 1–10) measures how hard a session was. Feeling     (1–5, very weak → very strong) measures how strong the athlete felt. They     are independent, either may be missing, and neither implies the other.
-    - Answer conversationally and briefly — a few sentences unless asked for more.
-    - Use the chat tool for ordinary replies. Only propose a schedule change when     the athlete asks about changing their plan, and only record a workout when     they tell you they did one.
-    - Never invent a date, a distance, or a rating the athlete did not give you.
-    """
+        \(dateAnchor(today: today, calendar: calendar))
+
+        Rules:
+        - ONLY reference workouts and sessions listed in the conversation.
+        - Perceived exertion (RPE, 1–10) measures how hard a session was. Feeling \
+        (1–5, very weak → very strong) measures how strong the athlete felt. They \
+        are independent, either may be missing, and neither implies the other.
+        - Answer conversationally and briefly — a few sentences unless asked for more.
+        - Use the chat tool for ordinary replies. Only propose a schedule change when \
+        the athlete asks about changing their plan, and only record a workout when \
+        they tell you they did one.
+        - Never invent a date, a distance, or a rating the athlete did not give you.
+        - Every date you emit is an absolute YYYY-MM-DD date worked out from today's \
+        date above: "today" is \(isoDate(startOfToday)), "yesterday" is \
+        \(isoDate(yesterday)), and a weekday name means the nearest such day in the \
+        direction the athlete is talking about. Never copy a date out of a tool \
+        description or an example.
+        """
+    }
 
     /// Builds the full prompt string for the given request.
     ///
@@ -130,16 +205,29 @@ public enum AICoachPromptBuilder {
     /// Assembles the turn sequence sent to the model for a conversation.
     ///
     /// The returned array always begins with a `.system` turn carrying
-    /// `chatSystemPreamble`. When `request.context` is non-nil the athlete's
-    /// training snapshot is prepended to the **first** user turn — once per
-    /// conversation, rather than on every turn, so the transcript rather than
-    /// repeated data fills the context window.
+    /// `chatSystemPreamble(today:)`. When `request.context` is non-nil the
+    /// athlete's training snapshot is prepended to the **first** user turn —
+    /// once per conversation, rather than on every turn, so the transcript
+    /// rather than repeated data fills the context window.
     ///
-    /// - Parameter request: The conversation and its optional training context.
+    /// The calendar anchor rides in the system turn instead, so it is present on
+    /// every turn even though the training snapshot is not.
+    ///
+    /// - Parameters:
+    ///   - request: The conversation and its optional training context.
+    ///   - today: The current date, for the calendar anchor. Defaults to now.
+    ///   - calendar: Calendar used for the relative days. Defaults to `.current`.
     /// - Returns: System turn followed by the conversation, oldest first.
-    public static func buildChatTurns(for request: CoachChatRequest) -> [CoachMessage] {
+    public static func buildChatTurns(
+        for request: CoachChatRequest,
+        today: Date = Date(),
+        calendar: Calendar = .current
+    ) -> [CoachMessage] {
         var turns: [CoachMessage] = [
-            CoachMessage(role: .system, text: chatSystemPreamble)
+            CoachMessage(
+                role: .system,
+                text: chatSystemPreamble(today: today, calendar: calendar)
+            )
         ]
 
         guard let context = request.context else {

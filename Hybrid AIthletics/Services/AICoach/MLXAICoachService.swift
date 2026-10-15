@@ -276,8 +276,12 @@ final class MLXAICoachService: AICoachService, @unchecked Sendable {
     ) async throws {
         let container = try await getContainer()
         let parameters = makeParameters(.chat)
-        let turns = AICoachPromptBuilder.buildChatTurns(for: request)
-        let tools = CoachToolSchemas.all
+        // Resolved once per turn, not per conversation: the model has no clock,
+        // so "today" has to be stated in the system turn and in every date
+        // argument's description or it fills dates in from an example.
+        let today = Date()
+        let turns = AICoachPromptBuilder.buildChatTurns(for: request, today: today)
+        let tools = CoachToolSchemas.all(today: today)
         // As in `generateStreaming`, the non-Sendable `UserInput` is built
         // inside the closure so it isn't captured across the actor hop.
         try await container.perform { context in

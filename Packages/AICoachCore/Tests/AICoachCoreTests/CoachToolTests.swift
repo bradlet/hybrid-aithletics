@@ -14,6 +14,18 @@ import Testing
 
 struct CoachToolSchemaTests {
 
+    /// Fixed "today" for schema assertions. The schemas name the current date
+    /// in their date descriptions, so they have to be built against one.
+    private let today = Date(timeIntervalSince1970: 1_792_004_400)
+
+    private var all: [[String: any Sendable]] { CoachToolSchemas.all(today: today) }
+    private var suggestScheduleChange: [String: any Sendable] {
+        CoachToolSchemas.suggestScheduleChange(today: today)
+    }
+    private var recordWorkout: [String: any Sendable] {
+        CoachToolSchemas.recordWorkout(today: today)
+    }
+
     /// Reads the `function` sub-object out of a tool envelope.
     private func fn(_ schema: [String: any Sendable]) -> [String: any Sendable] {
         schema["function"] as! [String: any Sendable]
@@ -32,21 +44,21 @@ struct CoachToolSchemaTests {
     }
 
     @Test func everyToolHasASchema() {
-        #expect(CoachToolSchemas.all.count == CoachTool.allCases.count)
+        #expect(all.count == CoachTool.allCases.count)
     }
 
     @Test func schemaNamesMatchToolRawValues() {
-        let names = CoachToolSchemas.all.map { fn($0)["name"] as! String }
+        let names = all.map { fn($0)["name"] as! String }
         #expect(Set(names) == Set(CoachTool.allCases.map(\.rawValue)))
     }
 
     @Test func chatIsOfferedFirst() {
         // The model should read "just reply" as the default option.
-        #expect(fn(CoachToolSchemas.all[0])["name"] as! String == CoachTool.chat.rawValue)
+        #expect(fn(all[0])["name"] as! String == CoachTool.chat.rawValue)
     }
 
     @Test func everySchemaIsAFunctionEnvelope() {
-        for schema in CoachToolSchemas.all {
+        for schema in all {
             #expect(schema["type"] as! String == "function")
             #expect(parameters(schema)["type"] as! String == "object")
             #expect(!(fn(schema)["description"] as! String).isEmpty)
@@ -54,7 +66,7 @@ struct CoachToolSchemaTests {
     }
 
     @Test func everyPropertyIsDescribed() {
-        for schema in CoachToolSchemas.all {
+        for schema in all {
             for (name, property) in properties(schema) {
                 let property = property as! [String: any Sendable]
                 let description = property["description"] as? String
@@ -64,7 +76,7 @@ struct CoachToolSchemaTests {
     }
 
     @Test func requiredFieldsExistAsProperties() {
-        for schema in CoachToolSchemas.all {
+        for schema in all {
             let names = Set(properties(schema).keys)
             for field in required(schema) {
                 #expect(names.contains(field), "required \(field) is not a property")
@@ -77,18 +89,18 @@ struct CoachToolSchemaTests {
     }
 
     @Test func scheduleChangeRequiresDateKindAndRationale() {
-        #expect(Set(required(CoachToolSchemas.suggestScheduleChange))
+        #expect(Set(required(suggestScheduleChange))
             == Set(["date", "kind", "rationale"]))
     }
 
     @Test func scheduleChangeKindEnumeratesEveryCase() {
-        let kind = properties(CoachToolSchemas.suggestScheduleChange)["kind"]
+        let kind = properties(suggestScheduleChange)["kind"]
             as! [String: any Sendable]
         #expect(kind["enum"] as! [String] == ScheduleChangeKind.allCases.map(\.rawValue))
     }
 
     @Test func exerciseTypeEnumeratesEveryCase() {
-        for schema in [CoachToolSchemas.suggestScheduleChange, CoachToolSchemas.recordWorkout] {
+        for schema in [suggestScheduleChange, recordWorkout] {
             let type = properties(schema)["exercise_type"] as! [String: any Sendable]
             #expect(type["enum"] as! [String] == CoachExerciseType.allCases.map(\.rawValue))
         }
@@ -96,11 +108,23 @@ struct CoachToolSchemaTests {
 
     @Test func recordWorkoutRequiresOnlyDateAndType() {
         // Everything else is something the athlete may simply not have said.
-        #expect(Set(required(CoachToolSchemas.recordWorkout)) == Set(["date", "exercise_type"]))
+        #expect(Set(required(recordWorkout)) == Set(["date", "exercise_type"]))
+    }
+
+    @Test func dateDescriptionsNameTodayRatherThanAnExample() {
+        // A static example date ("e.g. 2026-04-06") was being copied straight
+        // into tool calls, so every date argument now carries today instead.
+        let iso = AICoachPromptBuilder.isoDate(today)
+        for schema in [suggestScheduleChange, recordWorkout] {
+            let date = properties(schema)["date"] as! [String: any Sendable]
+            let description = date["description"] as! String
+            #expect(description.contains("YYYY-MM-DD"))
+            #expect(description.contains(iso))
+        }
     }
 
     @Test func recordWorkoutKeepsFeelingAndExertionSeparate() {
-        let props = properties(CoachToolSchemas.recordWorkout)
+        let props = properties(recordWorkout)
         let exertion = (props["perceived_exertion"] as! [String: any Sendable])["description"] as! String
         let feeling = (props["feeling"] as! [String: any Sendable])["description"] as! String
         #expect(exertion.contains("1 (very easy) to 10"))
@@ -401,6 +425,18 @@ struct CoachProposalCodableTests {
 
 struct CoachChatPromptTests {
 
+    /// Fixed "today" so the calendar anchor in the system turn is assertable.
+    /// 2026-10-14, a Wednesday, in the current time zone.
+    private let today = Date(timeIntervalSince1970: 1_792_004_400)
+
+    private func chatTurns(for request: CoachChatRequest) -> [CoachMessage] {
+        AICoachPromptBuilder.buildChatTurns(for: request, today: today)
+    }
+
+    private var preamble: String {
+        AICoachPromptBuilder.chatSystemPreamble(today: today)
+    }
+
     private func request(
         messages: [CoachMessage],
         context: CoachingRequest? = nil
@@ -434,27 +470,56 @@ struct CoachChatPromptTests {
     }
 
     @Test func systemTurnComesFirstAndOnlyOnce() {
-        let turns = AICoachPromptBuilder.buildChatTurns(for: request(messages: [
+        let turns = chatTurns(for: request(messages: [
             CoachMessage(role: .user, text: "hi"),
             CoachMessage(role: .coach, text: "hello"),
             CoachMessage(role: .user, text: "again"),
         ]))
         #expect(turns.first?.role == .system)
-        #expect(turns.first?.text == AICoachPromptBuilder.chatSystemPreamble)
+        #expect(turns.first?.text == preamble)
         #expect(turns.filter { $0.role == .system }.count == 1)
     }
 
     @Test func chatPreambleIsNotTheOneShotPreamble() {
         // The one-shot preamble mandates a bullet list; conversation must not.
-        #expect(AICoachPromptBuilder.chatSystemPreamble != AICoachPromptBuilder.systemPreamble)
-        #expect(!AICoachPromptBuilder.chatSystemPreamble.contains("3–5 bullet points"))
+        #expect(preamble != AICoachPromptBuilder.systemPreamble)
+        #expect(!preamble.contains("3–5 bullet points"))
     }
 
     @Test func chatPreambleStatesTheRatingsAreIndependent() {
-        let preamble = AICoachPromptBuilder.chatSystemPreamble
         #expect(preamble.contains("RPE"))
         #expect(preamble.contains("independent"))
         #expect(preamble.contains("either may be missing"))
+    }
+
+    @Test func chatPreambleAnchorsTodaysDate() {
+        // Without this the model had no clock at all and dated workouts from
+        // whatever example date it had last seen.
+        let iso = AICoachPromptBuilder.isoDate(today)
+        #expect(preamble.contains("Today is \(iso) Wednesday"))
+        #expect(preamble.contains("\"today\" is \(iso)"))
+    }
+
+    @Test func chatPreambleNamesYesterdayAndTomorrow() {
+        #expect(preamble.contains("Yesterday was 2026-10-13 Tuesday"))
+        #expect(preamble.contains("tomorrow is 2026-10-15 Thursday"))
+    }
+
+    @Test func chatPreambleRecomputesTheAnchorPerTurn() {
+        let laterPreamble = AICoachPromptBuilder.chatSystemPreamble(
+            today: today.addingTimeInterval(86_400)
+        )
+        #expect(laterPreamble != preamble)
+        #expect(laterPreamble.contains("Today is 2026-10-15"))
+    }
+
+    @Test func systemTurnCarriesTheAnchorEvenWithoutContext() {
+        // The snapshot is attached once per conversation; the date is not, so
+        // it has to ride in the system turn to survive later turns.
+        let turns = chatTurns(for: request(messages: [
+            CoachMessage(role: .user, text: "I ran this morning"),
+        ]))
+        #expect(turns.first?.text.contains(AICoachPromptBuilder.isoDate(today)) == true)
     }
 
     @Test func transcriptRoundTripsInOrder() {
@@ -463,7 +528,7 @@ struct CoachChatPromptTests {
             CoachMessage(role: .coach, text: "two"),
             CoachMessage(role: .user, text: "three"),
         ]
-        let turns = AICoachPromptBuilder.buildChatTurns(for: request(messages: messages))
+        let turns = chatTurns(for: request(messages: messages))
         #expect(turns.dropFirst().map(\.role) == [.user, .coach, .user])
         #expect(turns.dropFirst().map(\.text) == ["one", "two", "three"])
     }
@@ -471,7 +536,7 @@ struct CoachChatPromptTests {
     @Test func contextAttachesToTheFirstUserTurnOnly() {
         let context = sampleContext()
         let snapshot = AICoachPromptBuilder.buildDataSections(for: context)
-        let turns = AICoachPromptBuilder.buildChatTurns(for: request(
+        let turns = chatTurns(for: request(
             messages: [
                 CoachMessage(role: .user, text: "How am I doing?"),
                 CoachMessage(role: .coach, text: "Well."),
@@ -489,14 +554,14 @@ struct CoachChatPromptTests {
         // The store keys pending proposals off message ids, so rewriting the
         // first turn's text must not rewrite its id.
         let message = CoachMessage(role: .user, text: "hi")
-        let turns = AICoachPromptBuilder.buildChatTurns(
+        let turns = chatTurns(
             for: request(messages: [message], context: sampleContext())
         )
         #expect(turns.last?.id == message.id)
     }
 
     @Test func noContextMeansNoSnapshotAnywhere() {
-        let turns = AICoachPromptBuilder.buildChatTurns(for: request(messages: [
+        let turns = chatTurns(for: request(messages: [
             CoachMessage(role: .user, text: "How am I doing?")
         ]))
         #expect(turns.allSatisfy { !$0.text.contains("Recent training") })
@@ -504,7 +569,7 @@ struct CoachChatPromptTests {
 
     @Test func contextRendersMetricAndImperial() {
         for metric in [false, true] {
-            let turns = AICoachPromptBuilder.buildChatTurns(for: request(
+            let turns = chatTurns(for: request(
                 messages: [CoachMessage(role: .user, text: "hi")],
                 context: sampleContext(metric: metric)
             ))
@@ -514,7 +579,7 @@ struct CoachChatPromptTests {
     }
 
     @Test func emptyTranscriptStillYieldsTheSystemTurn() {
-        let turns = AICoachPromptBuilder.buildChatTurns(for: request(messages: []))
+        let turns = chatTurns(for: request(messages: []))
         #expect(turns.count == 1)
         #expect(turns[0].role == .system)
     }

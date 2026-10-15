@@ -18,12 +18,27 @@ public enum CoachToolSchemas {
     /// All tool schemas, in the order they are presented to the model.
     ///
     /// `chat` comes first so the model's default reading is "just reply".
-    public static var all: [[String: any Sendable]] {
-        [chat, suggestScheduleChange, recordWorkout]
+    ///
+    /// - Parameter today: The current date, named in every date argument's
+    ///   description so the model has an anchor at the point it fills the
+    ///   field in. A fixed example date here instead is what a model copies
+    ///   into the call verbatim.
+    /// - Returns: Tool schemas in presentation order.
+    public static func all(today: Date) -> [[String: any Sendable]] {
+        [chat, suggestScheduleChange(today: today), recordWorkout(today: today)]
     }
 
     /// Date format the model is told to emit, and that `CoachToolDecoder` parses.
-    public static let dateFormatDescription = "calendar date as YYYY-MM-DD, e.g. 2026-04-06"
+    ///
+    /// Carries today's date rather than a static example: the example date this
+    /// once held ("e.g. 2026-04-06") was being emitted as the workout date
+    /// regardless of when the athlete actually trained.
+    /// - Parameter today: The current date.
+    /// - Returns: A description of the expected date format.
+    public static func dateFormatDescription(today: Date) -> String {
+        "an absolute calendar date as YYYY-MM-DD, where today is "
+            + AICoachPromptBuilder.isoDate(today)
+    }
 
     // MARK: - chat
 
@@ -46,7 +61,7 @@ public enum CoachToolSchemas {
     // MARK: - suggest_schedule_change
 
     /// Propose an edit to one scheduled session.
-    public static var suggestScheduleChange: [String: any Sendable] {
+    public static func suggestScheduleChange(today: Date) -> [String: any Sendable] {
         function(
             name: CoachTool.suggestScheduleChange.rawValue,
             description: """
@@ -56,7 +71,7 @@ public enum CoachToolSchemas {
             explain your reasoning in "rationale".
             """,
             properties: [
-                "date": string("Which session to change — \(dateFormatDescription)."),
+                "date": string("Which session to change — \(dateFormatDescription(today: today))."),
                 "kind": enumeration(
                     ScheduleChangeKind.allCases.map(\.rawValue),
                     "What to change about the session."
@@ -76,7 +91,7 @@ public enum CoachToolSchemas {
     // MARK: - record_workout
 
     /// Propose recording a workout the athlete described.
-    public static var recordWorkout: [String: any Sendable] {
+    public static func recordWorkout(today: Date) -> [String: any Sendable] {
         function(
             name: CoachTool.recordWorkout.rawValue,
             description: """
@@ -85,7 +100,7 @@ public enum CoachToolSchemas {
             fields they actually stated — omit the rest rather than guessing.
             """,
             properties: [
-                "date": string("The day performed — \(dateFormatDescription)."),
+                "date": string("The day performed — \(dateFormatDescription(today: today))."),
                 "exercise_type": enumeration(
                     CoachExerciseType.allCases.map(\.rawValue),
                     "The activity type."

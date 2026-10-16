@@ -127,26 +127,28 @@ struct CoachToolSchemaTests {
     }
 
     @Test func strengthDayMuscleGroupEnumeratesEveryCase() {
-        let group = itemProperties(planStrengthDay)["muscle_group"] as! [String: any Sendable]
-        #expect(group["enum"] as! [String] == CoachMuscleGroup.allCases.map(\.rawValue))
-    }
-
-    @Test func strengthDayExercisesIsABoundedArrayOfObjects() {
+        // With the flat string format there is no enum array to read — the
+        // description itself must list the valid groups.
         let exercises = properties(planStrengthDay)["exercises"] as! [String: any Sendable]
-        #expect(exercises["type"] as! String == "array")
-        #expect(exercises["minItems"] as! Int == 1)
-        #expect(exercises["maxItems"] as! Int == StrengthDayProposal.maxExercises)
-        let items = exerciseItems(planStrengthDay)
-        #expect(items["type"] as! String == "object")
-        #expect(items["required"] as! [String] == ["name", "muscle_group"])
+        let description = exercises["description"] as! String
+        for group in CoachMuscleGroup.allCases {
+            #expect(description.contains(group.rawValue), "missing \(group.rawValue)")
+        }
     }
 
-    @Test func strengthDayExerciseItemPropertiesAreAllDescribed() {
-        for (name, property) in itemProperties(planStrengthDay) {
-            let property = property as! [String: any Sendable]
-            let description = property["description"] as? String
-            #expect(description?.isEmpty == false, "item \(name) needs a description")
-        }
+    @Test func strengthDayExercisesIsAStringInTheBoardsLineFormat() {
+        // exercises is deliberately a flat string, not an array of objects:
+        // the Gemma tool dialect's escape marker defeats the model runtime's
+        // parser for nested values, so a nested schema arrived as one raw
+        // string and failed decode every single time.
+        let exercises = properties(planStrengthDay)["exercises"] as! [String: any Sendable]
+        #expect(exercises["type"] as! String == "string")
+        let description = exercises["description"] as! String
+        // The line format mirrors the prompt's strength board lines so the
+        // model imitates what it has already seen.
+        #expect(description.contains("Name (Muscle Group), sets x reps"))
+        #expect(description.contains("semicolons"))
+        #expect(description.contains("at most \(StrengthDayProposal.maxExercises)"))
     }
 
     @Test func strengthDayDescriptionAsksForTheWholeDayInOneCall() {
@@ -181,8 +183,7 @@ struct CoachToolSchemaTests {
         let exercises = properties(planStrengthDay)["exercises"] as! [String: any Sendable]
         let description = exercises["description"] as! String
         #expect(description.contains("REQUIRED"))
-        #expect(description.contains("\"name\""))
-        #expect(description.contains("\"muscle_group\""))
+        #expect(description.contains("Muscle Group"))
     }
 
     @Test func strengthUpdateRequiresWeekdayExerciseChangeAndRationale() {
@@ -215,19 +216,6 @@ struct CoachToolSchemaTests {
         let description = fn(updateStrengthExercise)["description"] as! String
         #expect(description.contains("ONE exercise"))
         #expect(description.contains("plan_strength_day"))
-    }
-
-    /// Reads the `items` sub-schema out of the tool's `exercises` property.
-    private func exerciseItems(_ schema: [String: any Sendable]) -> [String: any Sendable] {
-        let exercises = properties(schema)["exercises"] as! [String: any Sendable]
-        return exercises["items"] as! [String: any Sendable]
-    }
-
-    /// Reads the properties of the `exercises` array's item object. Unlike the
-    /// top-level helpers, the item schema is not wrapped in a function
-    /// envelope, so its `properties` sit at its own top level.
-    private func itemProperties(_ schema: [String: any Sendable]) -> [String: any Sendable] {
-        exerciseItems(schema)["properties"] as! [String: any Sendable]
     }
 
     @Test func dateDescriptionsNameTodayRatherThanAnExample() {
@@ -699,6 +687,165 @@ struct CoachToolDecoderTests {
         }
     }
 
+    // MARK: plan_strength_day — line-format string
+
+    /// Arguments with `exercises` in the schema's flat line format — the
+    /// shape the Gemma dialect parser actually survives.
+    private func strengthDayStringArguments(
+        _ exercises: String = "Barbell Back Squat (Quads), 3x5; Barbell Bench Press (Chest)"
+    ) -> [String: Any] {
+        [
+            "weekday": "Friday",
+            "exercises": exercises,
+            "rationale": "Full body coverage for Friday.",
+        ]
+    }
+
+    @Test func decodesStrengthDayFromTheLineFormatString() throws {
+        let action = try CoachToolDecoder.decode(
+            name: "plan_strength_day",
+            arguments: strengthDayStringArguments()
+        )
+        #expect(action == .planStrengthDay(StrengthDayProposal(
+            weekdayIndex: 5,
+            exercises: [
+                PlannedStrengthExercise(
+                    name: "Barbell Back Squat", muscleGroup: .quads,
+                    plannedSets: 3, plannedReps: 5
+                ),
+                PlannedStrengthExercise(name: "Barbell Bench Press", muscleGroup: .chest),
+            ],
+            rationale: "Full body coverage for Friday."
+        )))
+    }
+
+    @Test func strengthDayStringAcceptsTheMultiplicationSign() throws {
+        // The strength board renders "3×5", so the model will imitate it.
+        let action = try CoachToolDecoder.decode(
+            name: "plan_strength_day",
+            arguments: strengthDayStringArguments("Barbell Back Squat (Quads), 3×5")
+        )
+        guard case .planStrengthDay(let proposal) = action else {
+            Issue.record("expected a strength day proposal")
+            return
+        }
+        #expect(proposal.exercises.first?.plannedSets == 3)
+        #expect(proposal.exercises.first?.plannedReps == 5)
+    }
+
+    @Test func strengthDayStringSplitsOnNewlinesToo() throws {
+        let action = try CoachToolDecoder.decode(
+            name: "plan_strength_day",
+            arguments: strengthDayStringArguments(
+                "Barbell Back Squat (Quads), 3x5\nPlank (Core)"
+            )
+        )
+        guard case .planStrengthDay(let proposal) = action else {
+            Issue.record("expected a strength day proposal")
+            return
+        }
+        #expect(proposal.exercises.count == 2)
+    }
+
+    @Test func strengthDayStringMuscleGroupIsCaseInsensitive() throws {
+        let action = try CoachToolDecoder.decode(
+            name: "plan_strength_day",
+            arguments: strengthDayStringArguments("Curl (biceps)")
+        )
+        guard case .planStrengthDay(let proposal) = action else {
+            Issue.record("expected a strength day proposal")
+            return
+        }
+        #expect(proposal.exercises.first?.muscleGroup == .biceps)
+    }
+
+    @Test func strengthDayStringReadsTheGroupFromTheLastParenSpan() throws {
+        // A name carrying its own qualifier must not swallow the group.
+        let action = try CoachToolDecoder.decode(
+            name: "plan_strength_day",
+            arguments: strengthDayStringArguments("Pull-Up (Assisted) (Back), 3x8")
+        )
+        guard case .planStrengthDay(let proposal) = action else {
+            Issue.record("expected a strength day proposal")
+            return
+        }
+        #expect(proposal.exercises.first?.name == "Pull-Up (Assisted)")
+        #expect(proposal.exercises.first?.muscleGroup == .back)
+    }
+
+    @Test func strengthDayStringRejectsAnEmptyList() {
+        #expect(throws: CoachToolDecodeError.self) {
+            try CoachToolDecoder.decode(
+                name: "plan_strength_day",
+                arguments: strengthDayStringArguments(" ; \n ")
+            )
+        }
+    }
+
+    @Test func strengthDayStringCapsTheExerciseList() {
+        let entries = (0..<StrengthDayProposal.maxExercises + 1)
+            .map { "Exercise \($0) (Core)" }
+            .joined(separator: "; ")
+        #expect(throws: CoachToolDecodeError.self) {
+            try CoachToolDecoder.decode(
+                name: "plan_strength_day",
+                arguments: strengthDayStringArguments(entries)
+            )
+        }
+    }
+
+    @Test func strengthDayStringRejectsAMissingMuscleGroup() {
+        // Without the paren group the exercise cannot be placed — rejected
+        // loudly rather than invented.
+        #expect(throws: CoachToolDecodeError.self) {
+            try CoachToolDecoder.decode(
+                name: "plan_strength_day",
+                arguments: strengthDayStringArguments("Barbell Back Squat, 3x5")
+            )
+        }
+    }
+
+    @Test func strengthDayStringRejectsAnUnknownMuscleGroup() {
+        #expect(throws: CoachToolDecodeError.self) {
+            try CoachToolDecoder.decode(
+                name: "plan_strength_day",
+                arguments: strengthDayStringArguments("Face Pull (Face)")
+            )
+        }
+    }
+
+    @Test func strengthDayStringRejectsMalformedSetsAndReps() {
+        for bad in ["Squat (Quads), three", "Squat (Quads), 3", "Squat (Quads), 3x"] {
+            #expect(throws: CoachToolDecodeError.self) {
+                try CoachToolDecoder.decode(
+                    name: "plan_strength_day",
+                    arguments: strengthDayStringArguments(bad)
+                )
+            }
+        }
+    }
+
+    @Test func strengthDayStringRejectsOutOfRangePlanNumbers() {
+        // Rejected, never clamped — same rule as the object path.
+        for bad in ["Squat (Quads), 0x8", "Squat (Quads), 21x8", "Squat (Quads), 3x0", "Squat (Quads), 3x101"] {
+            #expect(throws: CoachToolDecodeError.self) {
+                try CoachToolDecoder.decode(
+                    name: "plan_strength_day",
+                    arguments: strengthDayStringArguments(bad)
+                )
+            }
+        }
+    }
+
+    @Test func strengthDayStringRejectsABlankExerciseName() {
+        #expect(throws: CoachToolDecodeError.self) {
+            try CoachToolDecoder.decode(
+                name: "plan_strength_day",
+                arguments: strengthDayStringArguments("(Core)")
+            )
+        }
+    }
+
     @Test func strengthDayRequiresRationale() {
         var arguments = strengthDayArguments()
         arguments.removeValue(forKey: "rationale")
@@ -1050,12 +1197,12 @@ struct CoachChatPromptTests {
     @Test func chatPreambleSpellsOutPlanStrengthDayRequiredFields() {
         // The failure this guards: plan_strength_day arrived with a weekday
         // and a rationale but no "exercises" — the picks were in the prose.
-        // The preamble has to name the fields and say the coach, not the
-        // athlete, chooses the lifts.
+        // The preamble has to name the fields, show the line format, and say
+        // the coach, not the athlete, chooses the lifts.
         #expect(preamble.contains("plan_strength_day requires"))
         #expect(preamble.contains("\"exercises\""))
-        #expect(preamble.contains("\"name\""))
-        #expect(preamble.contains("\"muscle_group\""))
+        #expect(preamble.contains("semicolon-separated"))
+        #expect(preamble.contains("Name (Muscle Group), sets x reps"))
         #expect(preamble.contains("YOU choose the exercises"))
     }
 

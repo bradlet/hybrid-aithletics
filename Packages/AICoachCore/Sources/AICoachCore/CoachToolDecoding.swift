@@ -148,27 +148,143 @@ public enum CoachToolDecoder {
     private static func strengthDay(
         from arguments: [String: Any]
     ) throws -> StrengthDayProposal {
-        let weekdayIndex = try requiredWeekday("weekday", in: arguments)
-        guard let rawExercises = arguments["exercises"] as? [[String: Any]] else {
+        StrengthDayProposal(
+            weekdayIndex: try requiredWeekday("weekday", in: arguments),
+            exercises: try strengthDayExercises(from: arguments),
+            rationale: try requiredString("rationale", in: arguments)
+        )
+    }
+
+    /// Reads the `exercises` argument in either shape it can arrive in. The
+    /// schema declares the flat line-format string — the only nested-free
+    /// representation the model runtime's Gemma dialect parser survives — but
+    /// a model that emits real-JSON nested arrays anyway still decodes.
+    private static func strengthDayExercises(
+        from arguments: [String: Any]
+    ) throws -> [PlannedStrengthExercise] {
+        if let rawExercises = arguments["exercises"] as? [[String: Any]] {
+            guard !rawExercises.isEmpty else {
+                throw CoachToolDecodeError.invalidArgument(
+                    name: "exercises",
+                    reason: "a strength day needs at least one exercise"
+                )
+            }
+            guard rawExercises.count <= StrengthDayProposal.maxExercises else {
+                throw CoachToolDecodeError.invalidArgument(
+                    name: "exercises",
+                    reason: "\(rawExercises.count) exercises is more than one day holds (max \(StrengthDayProposal.maxExercises))"
+                )
+            }
+            return try rawExercises.map(plannedStrengthExercise(from:))
+        }
+        guard let text = optionalString("exercises", in: arguments) else {
             throw CoachToolDecodeError.missingArgument("exercises")
         }
-        guard !rawExercises.isEmpty else {
+        return try parseStrengthExerciseList(text)
+    }
+
+    /// Parses the line-format exercise list the schema asks for:
+    /// `Name (Muscle Group), sets x reps`, entries separated by semicolons or
+    /// newlines — the same shape the prompt uses to list the strength board.
+    private static func parseStrengthExerciseList(
+        _ text: String
+    ) throws -> [PlannedStrengthExercise] {
+        let entries = text
+            .replacingOccurrences(of: "\n", with: ";")
+            .components(separatedBy: ";")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !entries.isEmpty else {
             throw CoachToolDecodeError.invalidArgument(
                 name: "exercises",
                 reason: "a strength day needs at least one exercise"
             )
         }
-        guard rawExercises.count <= StrengthDayProposal.maxExercises else {
+        guard entries.count <= StrengthDayProposal.maxExercises else {
             throw CoachToolDecodeError.invalidArgument(
                 name: "exercises",
-                reason: "\(rawExercises.count) exercises is more than one day holds (max \(StrengthDayProposal.maxExercises))"
+                reason: "\(entries.count) exercises is more than one day holds (max \(StrengthDayProposal.maxExercises))"
             )
         }
-        return StrengthDayProposal(
-            weekdayIndex: weekdayIndex,
-            exercises: try rawExercises.map(plannedStrengthExercise(from:)),
-            rationale: try requiredString("rationale", in: arguments)
+        return try entries.map(parseStrengthExerciseLine(_:))
+    }
+
+    /// Parses one `Name (Muscle Group), NxM` entry.
+    ///
+    /// The muscle group is read from the LAST parenthesized span, so a name
+    /// carrying its own qualifier — "Pull-Up (Assisted) (Back)" — still
+    /// resolves its group correctly.
+    private static func parseStrengthExerciseLine(
+        _ entry: String
+    ) throws -> PlannedStrengthExercise {
+        guard let open = entry.lastIndex(of: "("),
+              let close = entry[open...].firstIndex(of: ")"),
+              close > open
+        else {
+            throw CoachToolDecodeError.invalidArgument(
+                name: "exercises",
+                reason: "\"\(entry)\" needs its muscle group in parentheses, "
+                    + "e.g. \"Barbell Bench Press (Chest), 3x8\""
+            )
+        }
+        let rawGroup = String(entry[entry.index(after: open)..<close])
+        guard let group = CoachMuscleGroup.allCases.first(where: {
+            $0.rawValue.caseInsensitiveCompare(rawGroup) == .orderedSame
+        }) else {
+            throw CoachToolDecodeError.invalidArgument(
+                name: "muscle_group",
+                reason: "\"\(rawGroup)\" is not a known muscle group"
+            )
+        }
+
+        let name = String(entry[..<open])
+            .trimmingCharacters(in: .whitespaces)
+            .trimmingCharacters(in: CharacterSet(charactersIn: ","))
+            .trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else {
+            throw CoachToolDecodeError.invalidArgument(
+                name: "exercises",
+                reason: "\"\(entry)\" has no exercise name"
+            )
+        }
+
+        let tail = String(entry[entry.index(after: close)...])
+        let (sets, reps) = try parseSetsReps(tail, entry: entry)
+        return PlannedStrengthExercise(
+            name: name, muscleGroup: group, plannedSets: sets, plannedReps: reps
         )
+    }
+
+    /// Reads the optional sets×reps suffix after the muscle-group paren:
+    /// empty, or "NxM" with either `x` or `×` (an optional leading comma is
+    /// tolerated). One number without the other is malformed, matching the
+    /// per-object path's only-together rule; ranges mirror the app's
+    /// `StrengthPlanDraft` steppers, as they do in `plannedStrengthExercise`.
+    private static func parseSetsReps(
+        _ tail: String, entry: String
+    ) throws -> (sets: Int?, reps: Int?) {
+        var trimmed = tail.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return (nil, nil) }
+        if trimmed.hasPrefix(",") {
+            trimmed = String(trimmed.dropFirst()).trimmingCharacters(in: .whitespaces)
+        }
+        let parts = trimmed.lowercased()
+            .replacingOccurrences(of: "×", with: "x")
+            .components(separatedBy: "x")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        guard parts.count == 2, let sets = Int(parts[0]), let reps = Int(parts[1]) else {
+            throw CoachToolDecodeError.invalidArgument(
+                name: "exercises",
+                reason: "\"\(entry)\" — sets and reps read as \"NxM\", e.g. \", 3x8\""
+            )
+        }
+        guard (1...20).contains(sets), (1...100).contains(reps) else {
+            throw CoachToolDecodeError.invalidArgument(
+                name: "exercises",
+                reason: "\"\(entry)\" — sets must be 1–20 and reps 1–100"
+            )
+        }
+        return (sets, reps)
     }
 
     /// Decodes a strength-exercise update: one board exercise plus the change

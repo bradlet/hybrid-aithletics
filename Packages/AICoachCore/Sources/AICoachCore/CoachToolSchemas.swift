@@ -101,6 +101,13 @@ public enum CoachToolSchemas {
     /// Carries no date argument: the strength board is a weekly template, so
     /// the tool takes a weekday name — which is also how the athlete phrases
     /// the request ("set up a full body routine on Friday").
+    ///
+    /// `exercises` is deliberately a flat string, not an array of objects:
+    /// the Gemma tool dialect writes strings with an escape marker the model
+    /// runtime's parser only unwraps for scalar values, so a nested array
+    /// arrived as one raw string and failed decode every time. The line format
+    /// mirrors how the prompt lists the strength board, which the model
+    /// imitates readily.
     public static var planStrengthDay: [String: any Sendable] {
         function(
             name: CoachTool.planStrengthDay.rawValue,
@@ -116,7 +123,7 @@ public enum CoachToolSchemas {
             span several muscle groups (quads or glutes, chest, back, \
             shoulders, arms, core) with one exercise each. YOU choose the \
             exercises — the athlete is asking you to program the day, not to \
-            name the lifts — and they belong in the "exercises" list: a call \
+            name the lifts — and they belong in the "exercises" string: a call \
             without exercises is invalid. The athlete reviews \
             and confirms every proposal, so explain your reasoning in \
             "rationale".
@@ -126,31 +133,16 @@ public enum CoachToolSchemas {
                     StrengthDayProposal.weekdayNames,
                     "Which day of the week to plan. The board is a weekly template, so this is a weekday name, never a date."
                 ),
-                "exercises": [
-                    "type": "array",
-                    "description": """
-                    REQUIRED, never omitted — the exercises you are programming \
-                    for the day, in the order they should be performed. One \
-                    exercise per muscle group the day is meant to cover. Every \
-                    item needs "name" and "muscle_group"; "sets" and "reps" \
-                    only together.
-                    """,
-                    "minItems": 1,
-                    "maxItems": StrengthDayProposal.maxExercises,
-                    "items": [
-                        "type": "object",
-                        "properties": [
-                            "name": string("The exercise's common name, e.g. \"Barbell Bench Press\"."),
-                            "muscle_group": enumeration(
-                                CoachMuscleGroup.allCases.map(\.rawValue),
-                                "The primary muscle group the exercise works."
-                            ),
-                            "sets": integer("Planned sets, 1–20. Only together with reps."),
-                            "reps": integer("Planned reps per set, 1–100. Only together with sets."),
-                        ] as [String: any Sendable],
-                        "required": ["name", "muscle_group"],
-                    ] as [String: any Sendable],
-                ] as [String: any Sendable],
+                "exercises": string("""
+                REQUIRED, never omitted — the day's exercises as ONE list, \
+                each entry "Name (Muscle Group), sets x reps", entries \
+                separated by semicolons, e.g. "Barbell Back Squat (Quads), \
+                3x5; Push-Up (Chest), 3x10; Plank (Core)". One exercise per \
+                muscle group the day covers, at most \
+                \(StrengthDayProposal.maxExercises). Muscle Group must be one \
+                of: \(CoachMuscleGroup.allCases.map(\.rawValue).joined(separator: ", ")). \
+                Sets and reps only together.
+                """),
                 "rationale": string("One or two sentences on why this day helps."),
             ],
             required: ["weekday", "exercises", "rationale"]

@@ -327,6 +327,64 @@ final class HomeUITests: XCTestCase {
             "the conversation should still be there"
         )
     }
+
+    // MARK: - Voice entry
+
+    @MainActor
+    func testVoiceButtonOpensChatWithDictatedDraft() throws {
+        let app = launchApp()
+        let mic = app.buttons["home.coachVoiceButton"]
+        XCTAssertTrue(mic.waitForExistence(timeout: 5), "voice button should exist")
+
+        // Home checks availability on appear; the mic lights up once the stub
+        // coach reports its weights cached.
+        let micEnabled = expectation(description: "voice button becomes enabled")
+        DispatchQueue.global().async {
+            let deadline = Date().addingTimeInterval(5)
+            while Date() < deadline {
+                if mic.isEnabled { micEnabled.fulfill(); return }
+                Thread.sleep(forTimeInterval: 0.2)
+            }
+        }
+        wait(for: [micEnabled], timeout: 8)
+        mic.tap()
+
+        let input = app.textFields["coach.chat.input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5), "composer should appear")
+
+        // The stub speech service's canned transcript, duplicated as a literal
+        // here the way the stub coach's trigger phrases are.
+        let dictated = "How should I adjust my training this week?"
+        let preloaded = expectation(description: "dictated text preloads the composer")
+        DispatchQueue.global().async {
+            let deadline = Date().addingTimeInterval(8)
+            while Date() < deadline {
+                if let value = input.value as? String, value == dictated {
+                    preloaded.fulfill()
+                    return
+                }
+                Thread.sleep(forTimeInterval: 0.2)
+            }
+        }
+        wait(for: [preloaded], timeout: 10)
+
+        // The dictated draft sends like any typed one.
+        let send = app.buttons["coach.chat.send"]
+        let sendEnabled = expectation(description: "send becomes enabled")
+        DispatchQueue.global().async {
+            let deadline = Date().addingTimeInterval(8)
+            while Date() < deadline {
+                if send.isEnabled { sendEnabled.fulfill(); return }
+                Thread.sleep(forTimeInterval: 0.2)
+            }
+        }
+        wait(for: [sendEnabled], timeout: 10)
+        send.tap()
+        XCTAssertTrue(
+            app.otherElements["coach.chat.bubble.user"].waitForExistence(timeout: 5),
+            "the dictated message should land in the transcript"
+        )
+    }
 }
 
 // MARK: - Model gating
@@ -352,6 +410,26 @@ extension HomeUITests {
         XCTAssertTrue(
             card.label.contains("download") || card.label.contains("Download"),
             "the card should read as a call to action, got: \(card.label)"
+        )
+    }
+
+    @MainActor
+    func testVoiceButtonIsGreyedOutWithDownloadCTAWhenModelIsMissing() throws {
+        let app = launchWithoutModel()
+        let mic = app.buttons["home.coachVoiceButton"]
+        XCTAssertTrue(mic.waitForExistence(timeout: 5), "voice button should exist")
+        XCTAssertFalse(
+            mic.isEnabled,
+            "voice input must be gated until the model exists"
+        )
+
+        // The greyed-out mic's way forward: a slim CTA onto the download prompt.
+        let cta = app.buttons["home.coachVoiceDownloadCTA"]
+        XCTAssertTrue(cta.waitForExistence(timeout: 5), "the slim CTA should be offered")
+        cta.tap()
+        XCTAssertTrue(
+            app.otherElements["coach.chat.downloadPrompt"].waitForExistence(timeout: 5),
+            "the CTA should land on the coach's download call to action"
         )
     }
 

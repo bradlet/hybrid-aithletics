@@ -42,6 +42,8 @@ struct HomeView: View {
     @State private var proposedWorkout: ProposedWorkoutRequest?
     /// Error surfaced when an accepted schedule change could not be applied.
     @State private var applyErrorMessage: String?
+    /// Whether the voice-first coach entry is pushed.
+    @State private var isVoiceEntryPresented = false
 
     /// Today's aerobic sessions, unrecorded first.
     private var todayAerobic: [Exercise] {
@@ -57,30 +59,35 @@ struct HomeView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
-                    NavigationLink {
-                        CoachChatView(
-                            buildContext: buildCoachRequest,
-                            onAcceptWorkout: { proposal, messageID in
-                                proposedWorkout = ProposedWorkoutRequest(
-                                    prefill: CoachProposalApplier.prefill(from: proposal),
-                                    messageID: messageID
+                    VStack(spacing: 8) {
+                        HStack(spacing: 12) {
+                            NavigationLink {
+                                coachChatView()
+                            } label: {
+                                CoachEntryCard(
+                                    lastReply: coachChat.lastCoachReply,
+                                    isGenerating: coachChat.isGenerating,
+                                    phase: coachChat.modelPhase
                                 )
-                            },
-                            onAcceptScheduleChange: applyScheduleChange,
-                            onAcceptStrengthDay: { proposal, messageID in
-                                Task { await applyStrengthDay(proposal, messageID: messageID) }
-                            },
-                            onAcceptStrengthExerciseUpdate: applyStrengthExerciseUpdate
-                        )
-                    } label: {
-                        CoachEntryCard(
-                            lastReply: coachChat.lastCoachReply,
-                            isGenerating: coachChat.isGenerating,
-                            phase: coachChat.modelPhase
-                        )
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("home.coachCard")
+
+                            voiceEntryButton
+                        }
+
+                        // While the weights are missing the mic sits greyed
+                        // out; this slim CTA is its obvious next step.
+                        if coachChat.modelPhase.needsDownload {
+                            NavigationLink {
+                                coachChatView()
+                            } label: {
+                                voiceDownloadCTA
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("home.coachVoiceDownloadCTA")
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("home.coachCard")
 
                     TodayTrainingSection(
                         aerobic: todayAerobic,
@@ -122,6 +129,10 @@ struct HomeView: View {
             // filesystem check only: it neither downloads nor loads, so the
             // landing tab never pulls gigabytes of weights into memory.
             .task { coachChat.checkAvailability(coach: coach) }
+            // Voice entry pushes the same destination with dictation armed.
+            .navigationDestination(isPresented: $isVoiceEntryPresented) {
+                coachChatView(startsWithVoice: true)
+            }
             .sheet(item: $quickAddRequest) { request in
                 RecordWorkoutSheet(exercise: nil, defaultDate: request.date)
             }
@@ -177,6 +188,71 @@ struct HomeView: View {
     }
 
     // MARK: - Coach
+
+    /// The coach conversation destination. Built in one place so the entry
+    /// card, the voice button, and the download CTA can't drift apart.
+    private func coachChatView(startsWithVoice: Bool = false) -> some View {
+        CoachChatView(
+            startsWithVoice: startsWithVoice,
+            buildContext: buildCoachRequest,
+            onAcceptWorkout: { proposal, messageID in
+                proposedWorkout = ProposedWorkoutRequest(
+                    prefill: CoachProposalApplier.prefill(from: proposal),
+                    messageID: messageID
+                )
+            },
+            onAcceptScheduleChange: applyScheduleChange,
+            onAcceptStrengthDay: { proposal, messageID in
+                Task { await applyStrengthDay(proposal, messageID: messageID) }
+            },
+            onAcceptStrengthExerciseUpdate: applyStrengthExerciseUpdate
+        )
+    }
+
+    /// The voice-first entry point: tap and talk to the coach.
+    ///
+    /// Gated on the same availability as the card — until the weights exist
+    /// the button sits greyed out, with the slim CTA below as the way forward.
+    private var voiceEntryButton: some View {
+        Button {
+            isVoiceEntryPresented = true
+        } label: {
+            Image(systemName: "mic.fill")
+                .font(.title2)
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(isVoiceUsable ? Color.accentColor : Color.secondary)
+                .frame(width: 56, height: 56)
+                .background(
+                    Circle().fill(
+                        (isVoiceUsable ? Color.accentColor : Color.secondary).opacity(0.15)
+                    )
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(!isVoiceUsable)
+        .opacity(isVoiceUsable ? 1 : 0.55)
+        .accessibilityIdentifier("home.coachVoiceButton")
+        .accessibilityLabel("Dictate to your coach")
+    }
+
+    /// Whether voice entry will land on a working coach.
+    private var isVoiceUsable: Bool { coachChat.modelPhase.isUsable }
+
+    /// One-line pointer to the chat's download prompt, shown while the model
+    /// is missing so the greyed-out mic has an obvious next step.
+    private var voiceDownloadCTA: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "arrow.down.circle")
+                .font(.caption)
+            Text("Download the coach model to enable voice input")
+                .font(.caption)
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.caption2)
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 4)
+    }
 
     /// Assembles the training snapshot handed to the coach: the last 4 weeks of
     /// recorded workouts and the next 2 weeks of planned sessions.

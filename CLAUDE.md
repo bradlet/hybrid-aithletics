@@ -45,6 +45,7 @@ cd Evals && swift run CoachEval inspect --scenario high-rpe --prompt-mode chat
 - **`isHuggingFaceRepoCached` must not check `config.json` alone** — it is a few hundred bytes and lands in the first second of a multi-gigabyte download, so an interrupted download would report itself cached and then fail to load. It requires weights present (a `.safetensors` file only appears once fully transferred, per the staging note above) *and* no leftover `.incomplete` partial.
 - **AI model delivery**: Gemma 4 E2B 4-bit weights (~4.3 GB) are **not bundled** — they download from Hugging Face on first use and are cached locally for offline access. mlx-swift-lm 3.x dropped its bundled Hub integration, so `Services/AICoach/MLXModelLoading.swift` supplies the `Downloader` / `TokenizerLoader` conformances over swift-transformers' `HubApi` and `AutoTokenizer`, plus an adapter bridging its `Tokenizer` to `MLXLMCommon`'s own copy. `ModelConfiguration.toolCallFormat` and `extraEOSTokens` must match the model family (`.gemma4` + `<turn|>` today; Gemma 3 used `.gemma` + `<end_of_turn>`). Note `Evals/` still pins Gemma 3 4B, so eval scores no longer reflect the production model.
 - **Conditional compilation**: All MLX-specific code is gated behind `#if canImport(MLXLLM)`. The `#else` branches throw `AICoachError.notImplemented` so the app compiles on simulators/CI without the SPM dependency resolved.
+- **Voice entry to the coach**: the Home mic button (`home.coachVoiceButton`) pushes the chat with `startsWithVoice: true`, arming dictation on appear. Dictation runs through the `CoachSpeechService` protocol — `LiveCoachSpeechService` over SFSpeechRecognizer (on-device where supported) and `StubCoachSpeechService` for previews/tests/UI tests — injected via `@Environment(\.coachSpeech)` with the stub as the default, and the stub injected at the app root under `-uiTestSeed`. The mic is gated on `CoachModelPhase.isUsable` exactly like the coach card; while the weights are missing it sits greyed out beside a slim CTA (`home.coachVoiceDownloadCTA`) that deep-links to the chat's download prompt. Dictated text merges into typed text via the pure `VoiceDraft.compose` helper; usage descriptions live in `Info.plist` (`NSMicrophone`/`NSSpeechRecognition`).
 - **Google Sheets Sync**: `GoogleSheetsSyncCoordinator` (`@MainActor @Observable`) debounces workout mutations and exports via the `GoogleSheetsAPI` protocol (`LiveGoogleSheetsAPI` uses GoogleSignIn-iOS + URLSession behind `#if canImport(GoogleSignIn)`; `StubGoogleSheetsAPI` for previews/tests). Injected via `@Environment(\.googleSheetsSync)`. Uses the **`auth/drive.file` scope** (per-file access only — non-sensitive, no Google verification needed); never `auth/spreadsheets`. OAuth client + Info.plist setup is documented in README.
 
 ## Testing Requirements
@@ -78,7 +79,7 @@ Models/          Data models and enums
 Config/          ModelContainer, environment keys (units, aiCoach), UITestFixtures
 Extensions/      Date+Week, Double+Distance (distance, duration, pace formatting)
 Services/
-  AICoach/       Protocol, MLX implementation, stub, type conversions
+  AICoach/       Coach protocol, MLX implementation, stub, speech-to-text, type conversions
 Views/
   Home/             Home tab (today's training, quick record, coach chat)
   AerobicTraining/  Training tab
@@ -103,6 +104,7 @@ Views/
 - `Services/AICoach/MLXAICoachService.swift` — production coach; swap model via `modelID` constant
 - `Services/AICoach/MLXModelLoading.swift` — Hugging Face downloader (byte-weighted progress), tokenizer loader, tokenizer adapter, and the cached-weights check
 - `Services/AICoach/CoachChatStore.swift` — ephemeral (session-scoped) conversation state; `@Environment(\.coachChat)`
+- `Services/AICoach/CoachSpeechService.swift` — speech-to-text protocol + `VoiceDraft` draft-merge helper; `LiveCoachSpeechService` wraps SFSpeechRecognizer, `StubCoachSpeechService` keeps tests off the microphone; `@Environment(\.coachSpeech)`
 - `Services/AICoach/CoachProposalApplier.swift` — applies accepted proposals; typed failures, no invented sessions (unit-tested)
 - `Services/AICoach/CoachTypeConversions.swift` — SwiftData ↔ AICoachCore type bridge
 - `Packages/AICoachCore/Sources/AICoachCore/CoachTools.swift` — tool vocabulary + proposal payloads

@@ -7036,3 +7036,77 @@ struct ByteRateMeterTests {
         #expect(rate == 0)
     }
 }
+
+// MARK: - Voice draft composition
+
+struct VoiceDraftTests {
+
+    @Test func emptyPrefixYieldsTheTranscript() {
+        #expect(VoiceDraft.compose(prefix: "", transcript: "hello coach") == "hello coach")
+    }
+
+    @Test func blankTranscriptKeepsTheTypedTextUntouched() {
+        // Not even trimmed: starting the mic must never rewrite typed text.
+        #expect(VoiceDraft.compose(prefix: "typed draft ", transcript: "   ") == "typed draft ")
+    }
+
+    @Test func prefixAndTranscriptJoinWithExactlyOneSpace() {
+        #expect(VoiceDraft.compose(prefix: "two questions", transcript: "first one") == "two questions first one")
+    }
+
+    @Test func trailingWhitespaceInPrefixCollapsesIntoTheJoin() {
+        #expect(VoiceDraft.compose(prefix: "typed  ", transcript: "spoken") == "typed spoken")
+    }
+
+    @Test func emptyDraftStaysEmpty() {
+        #expect(VoiceDraft.compose(prefix: "", transcript: "") == "")
+    }
+}
+
+// MARK: - Stub speech service
+
+@MainActor
+struct StubCoachSpeechServiceTests {
+
+    @Test func startEmitsTheCannedTranscriptAndRecords() async {
+        let speech = StubCoachSpeechService()
+        await speech.start()
+        #expect(speech.isRecording)
+        #expect(speech.transcript == StubCoachSpeechService.defaultTranscript)
+        #expect(speech.errorMessage == nil)
+    }
+
+    @Test func stopKeepsTheTranscriptForReview() async {
+        let speech = StubCoachSpeechService()
+        await speech.start()
+        speech.stop()
+        #expect(!speech.isRecording)
+        #expect(speech.transcript == StubCoachSpeechService.defaultTranscript)
+    }
+
+    @Test func resetArmsTheNextSession() async {
+        let speech = StubCoachSpeechService()
+        await speech.start()
+        speech.stop()
+        speech.reset()
+        #expect(speech.transcript.isEmpty)
+        #expect(speech.errorMessage == nil)
+    }
+
+    @Test func startingTwiceIsIdempotent() async {
+        let speech = StubCoachSpeechService(transcript: "first")
+        await speech.start()
+        await speech.start()
+        #expect(speech.transcript == "first")
+        #expect(speech.isRecording)
+    }
+
+    @Test func cannedErrorSurfacesWithoutRecording() async {
+        let speech = StubCoachSpeechService()
+        speech.cannedError = "denied"
+        await speech.start()
+        #expect(!speech.isRecording)
+        #expect(speech.transcript.isEmpty)
+        #expect(speech.errorMessage == "denied")
+    }
+}

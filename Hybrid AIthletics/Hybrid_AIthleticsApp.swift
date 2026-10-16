@@ -41,6 +41,11 @@ struct Hybrid_AIthleticsApp: App {
     /// so it starts fresh on every launch.
     @State private var coachChat = CoachChatStore()
 
+    /// Shared speech-to-text for the coach composer. The live service wraps
+    /// SFSpeechRecognizer; under `-uiTestSeed` the stub keeps dictation
+    /// deterministic and never presents a permission prompt.
+    private let coachSpeech: CoachSpeechService = Self.makeSpeechForLaunch()
+
     init() {
         // When launched by the UI test harness with `-uiTestSeed`, replace any
         // existing workouts in the container with a deterministic fixture set.
@@ -58,6 +63,7 @@ struct Hybrid_AIthleticsApp: App {
                 .environment(\.healthKitImport, healthKitImport)
                 .environment(\.googleSheetsSync, sheetsSync)
                 .environment(\.coachChat, coachChat)
+                .environment(\.coachSpeech, coachSpeech)
                 .task {
                     // Restore Google Sheets sync state from AppConfiguration
                     // and silently re-authorize the OAuth session if a
@@ -90,6 +96,14 @@ struct Hybrid_AIthleticsApp: App {
             return StubAICoachService()
         }
         return MLXAICoachService()
+    }
+
+    /// Returns the speech service to inject, honoring the UI test harness.
+    private static func makeSpeechForLaunch() -> CoachSpeechService {
+        if CommandLine.arguments.contains("-uiTestSeed") {
+            return StubCoachSpeechService()
+        }
+        return LiveCoachSpeechService()
     }
 
     /// Builds the model container to install into the view hierarchy.

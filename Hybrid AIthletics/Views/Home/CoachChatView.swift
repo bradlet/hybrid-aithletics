@@ -16,7 +16,11 @@ import AICoachCore
 struct CoachChatView: View {
     @Environment(\.aiCoach) private var coach
     @Environment(\.coachChat) private var store
+    @Environment(\.coachSpeech) private var speech
 
+    /// Whether the chat begins dictating as soon as it appears. Set by the
+    /// Home tab's mic button — the voice-first entry point.
+    let startsWithVoice: Bool
     /// Builds the training snapshot. Called at most once per conversation.
     let buildContext: () -> CoachingRequest
     /// Called when the athlete accepts a workout proposal.
@@ -28,7 +32,26 @@ struct CoachChatView: View {
     /// Called when the athlete accepts a strength-exercise update.
     let onAcceptStrengthExerciseUpdate: (StrengthExerciseUpdateProposal, UUID) -> Void
 
+    init(
+        startsWithVoice: Bool = false,
+        buildContext: @escaping () -> CoachingRequest,
+        onAcceptWorkout: @escaping (WorkoutProposal, UUID) -> Void,
+        onAcceptScheduleChange: @escaping (ScheduleChangeProposal, UUID) -> Void,
+        onAcceptStrengthDay: @escaping (StrengthDayProposal, UUID) -> Void,
+        onAcceptStrengthExerciseUpdate: @escaping (StrengthExerciseUpdateProposal, UUID) -> Void
+    ) {
+        self.startsWithVoice = startsWithVoice
+        self.buildContext = buildContext
+        self.onAcceptWorkout = onAcceptWorkout
+        self.onAcceptScheduleChange = onAcceptScheduleChange
+        self.onAcceptStrengthDay = onAcceptStrengthDay
+        self.onAcceptStrengthExerciseUpdate = onAcceptStrengthExerciseUpdate
+    }
+
     @State private var draft: String = ""
+    /// The draft as it stood when the current dictation session began, so the
+    /// transcript appends to typed text rather than replacing it.
+    @State private var draftPrefix = ""
 
     /// Prompts offered on an empty transcript. The first is the question the
     /// retired one-shot sheet asked, verbatim.
@@ -77,6 +100,10 @@ struct CoachChatView: View {
                             tint: .red
                         )
                     }
+
+                    if let speechError = speech.errorMessage {
+                        noticeCard(speechError, systemImage: "mic.slash", tint: .orange)
+                    }
                 }
                 .padding()
             }
@@ -115,6 +142,19 @@ struct CoachChatView: View {
             }
         }
         .task { await store.prepareModel(coach: coach) }
+        // The Home mic button lands here mid-gesture: start listening
+        // immediately rather than making the athlete tap a second mic.
+        .task {
+            guard startsWithVoice else { return }
+            await startVoiceSession()
+        }
+        // Dictation streams into the composer, appended to anything already
+        // typed. While recording, the mic session owns the draft.
+        .onChange(of: speech.transcript) { _, transcript in
+            draft = VoiceDraft.compose(prefix: draftPrefix, transcript: transcript)
+        }
+        // Leaving the conversation ends the capture; the draft stays for review.
+        .onDisappear { speech.stop() }
     }
 
     // MARK: - Subviews
@@ -346,6 +386,18 @@ struct CoachChatView: View {
                 .accessibilityIdentifier("coach.chat.input")
 
             Button {
+                Task { await toggleVoice() }
+            } label: {
+                Image(systemName: speech.isRecording ? "stop.circle.fill" : "mic.circle.fill")
+                    .font(.title2)
+            }
+            // Red while capturing so the live state reads at a glance.
+            .tint(speech.isRecording ? .red : .accentColor)
+            .disabled(!store.canSend)
+            .accessibilityIdentifier("coach.chat.mic")
+            .accessibilityLabel(speech.isRecording ? "Stop dictation" : "Dictate")
+
+            Button {
                 send(draft)
             } label: {
                 Image(systemName: "arrow.up.circle.fill")
@@ -380,10 +432,31 @@ struct CoachChatView: View {
     private func send(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard store.canSend, !trimmed.isEmpty else { return }
+        // A sent draft ends the dictation session along with it.
+        speech.stop()
+        speech.reset()
+        draftPrefix = ""
         draft = ""
         Task {
             await store.send(trimmed, coach: coach, context: buildContext())
         }
+    }
+
+    /// Starts or stops dictation into the composer.
+    private func toggleVoice() async {
+        if speech.isRecording {
+            speech.stop()
+        } else {
+            await startVoiceSession()
+        }
+    }
+
+    /// Arms a dictation session. Anything already typed is preserved as the
+    /// prefix the transcript appends to.
+    private func startVoiceSession() async {
+        draftPrefix = draft
+        speech.reset()
+        await speech.start()
     }
 
     /// Routes an accepted proposal to the Home tab, which owns the model context.

@@ -170,15 +170,23 @@ sequenceDiagram
 
 ## AI Coach Serialization
 
-`Services/AICoach/StrengthCoachExport.swift` provides snapshot types and a
-serializer, deliberately not yet plumbed into the coach prompt:
+The strength board is part of the coaching snapshot:
 
-- `CoachStrengthWorkout` / `CoachStrengthExercise` — plain Codable snapshots of the
-  SwiftData models (empty notes omitted, workouts sorted oldest-first).
-- `StrengthCoachExporter.snapshots(from:)` / `jsonData(from:)` / `jsonString(from:)`
-  — deterministic JSON (ISO 8601 dates, sorted keys), exercises in board order.
+- `CoachStrengthWorkout` / `CoachStrengthExercise` — plain Codable snapshots,
+  living in the AICoachCore package alongside `CoachWorkout` / `CoachExercise`
+  so the Evals CLI shares them.
+- `CoachTypeConversions.swift` (app) bridges the SwiftData models to those
+  types: `CoachStrengthExercise(from:)` (empty notes → `nil`, workouts sorted
+  oldest-first) and `CoachStrengthExercise.snapshots(from:)` (board order).
+- `CoachingRequest.strengthExercises` carries the board into
+  `AICoachPromptBuilder`'s "Strength board" prompt section (active lanes only,
+  one line per exercise with its sets × reps plan).
 
-This mirrors the `CoachWorkout` / `CoachExercise` pattern in AICoachCore.
+The coach can also *plan* strength: its `plan_strength_day` tool proposes a
+batch of exercises for one weekday lane (weekday name, not a date — the board
+is a weekly template). Accepting inserts at the lane end via
+`CoachProposalApplier`, matching names against the merged library for
+provenance and skipping names the active lane already has.
 
 ## Feature Plan / Extensibility Notes
 
@@ -195,10 +203,9 @@ Planned extension points, in the order they were designed in:
    (`averageWeight`), and first/last-set trends for fatigue analysis. A future
    History integration can group `exercise.workouts` by `recordingType` and feed
    Swift Charts — no schema change needed.
-3. **AI coach integration.** Wire `StrengthCoachExporter` output into
-   `CoachingRequest` (likely moving the snapshot types into the `AICoachCore`
-   package so the Evals CLI shares them), then extend `AICoachPromptBuilder` to
-   serialize the strength section alongside aerobic data.
+3. **Richer coach integration.** The board is in the snapshot and
+   `plan_strength_day` plans a day; a natural next step is recording lifts by
+   chat, or coach moves/removals of board exercises (today's tool only adds).
 4. **Library growth.** The bundled catalog
    (`Resources/StrengthExerciseLibrary.json`, 100 exercises) is a plain JSON array —
    adding entries is a data change, not a code change. `LibraryExercise` keeps
@@ -219,5 +226,6 @@ Unit tests live in `Hybrid AIthleticsTests/Hybrid_AIthleticsTests.swift`:
   (`ExerciseLibraryProviderTests`).
 - Board ordering math — reorder, cross-day, offload round-trips
   (`StrengthBoardPlannerTests`).
-- Coach export field mapping, ordering, and JSON output
-  (`StrengthCoachExporterTests`).
+- Coach conversion field mapping, ordering, and muscle-group round-trips
+  (`CoachStrengthConversionTests`, `CoachTypeConversionTests`), plus
+  strength-day proposal application (`CoachProposalApplierTests`).

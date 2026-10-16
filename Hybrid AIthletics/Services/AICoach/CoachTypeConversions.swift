@@ -65,3 +65,69 @@ extension CoachExercise {
         )
     }
 }
+
+extension CoachMuscleGroup {
+
+    /// Creates a coaching muscle group from the app's UI-aware `MuscleGroup`.
+    /// Raw values are identical between the two enums by design; an unknown
+    /// value reads as `.other`, matching `MuscleGroup`'s tolerant decode.
+    init(from appGroup: MuscleGroup) {
+        self = CoachMuscleGroup(rawValue: appGroup.rawValue) ?? .other
+    }
+}
+
+extension MuscleGroup {
+
+    /// Creates the app's UI-aware muscle group from a coaching type.
+    ///
+    /// The reverse of `CoachMuscleGroup(from:)`, with the same `.other`
+    /// fallback for values that arrive from a language model.
+    init(from coachGroup: CoachMuscleGroup) {
+        self = MuscleGroup(rawValue: coachGroup.rawValue) ?? .other
+    }
+}
+
+extension CoachStrengthWorkout {
+
+    /// Creates a coaching snapshot from a recorded strength workout. Empty
+    /// notes arrive as `nil` so they stay out of prompt output.
+    init(from workout: StrengthWorkout) {
+        self.init(
+            date: workout.date,
+            weightPounds: workout.weightPounds,
+            recordingType: workout.recordingType.rawValue,
+            notes: workout.notes.isEmpty ? nil : workout.notes
+        )
+    }
+}
+
+extension CoachStrengthExercise {
+
+    /// Creates a coaching snapshot from a board exercise, with its recorded
+    /// workouts sorted oldest first. Empty notes arrive as `nil`.
+    init(from exercise: StrengthExercise) {
+        self.init(
+            name: exercise.name,
+            muscleGroup: exercise.muscleGroup.rawValue,
+            weekdayIndex: exercise.weekdayIndex,
+            isOffloaded: exercise.isOffloaded,
+            notes: exercise.notes.isEmpty ? nil : exercise.notes,
+            plannedSets: exercise.plannedSets,
+            plannedReps: exercise.plannedReps,
+            workouts: exercise.workouts
+                .sorted { $0.date < $1.date }
+                .map { CoachStrengthWorkout(from: $0) }
+        )
+    }
+
+    /// Converts board exercises into coach snapshots, in board order (day,
+    /// then section, then position).
+    static func snapshots(from exercises: [StrengthExercise]) -> [CoachStrengthExercise] {
+        exercises
+            .sorted {
+                ($0.weekdayIndex, $0.isOffloaded ? 1 : 0, $0.sortOrder)
+                    < ($1.weekdayIndex, $1.isOffloaded ? 1 : 0, $1.sortOrder)
+            }
+            .map { CoachStrengthExercise(from: $0) }
+    }
+}

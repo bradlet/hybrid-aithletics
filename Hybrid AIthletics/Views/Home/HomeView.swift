@@ -66,7 +66,10 @@ struct HomeView: View {
                                     messageID: messageID
                                 )
                             },
-                            onAcceptScheduleChange: applyScheduleChange
+                            onAcceptScheduleChange: applyScheduleChange,
+                            onAcceptStrengthDay: { proposal, messageID in
+                                Task { await applyStrengthDay(proposal, messageID: messageID) }
+                            }
                         )
                     } label: {
                         CoachEntryCard(
@@ -199,6 +202,7 @@ struct HomeView: View {
         return CoachingRequest(
             recentWorkouts: recent,
             upcomingExercises: upcoming,
+            strengthExercises: CoachStrengthExercise.snapshots(from: allStrengthExercises),
             useMetricUnits: useMetricUnits
         )
     }
@@ -214,6 +218,44 @@ struct HomeView: View {
             coachChat.confirmProposal(for: messageID, note: "Done — I've updated your plan.")
         } catch {
             applyErrorMessage = error.localizedDescription
+        }
+    }
+
+    /// Applies an accepted strength-day proposal against the merged exercise
+    /// library (bundled + the athlete's own entries), then confirms in the
+    /// transcript what landed and what was skipped as already planned.
+    private func applyStrengthDay(_ proposal: StrengthDayProposal, messageID: UUID) async {
+        let provider = CompositeExerciseLibraryProvider.withUserLibrary(
+            container: modelContext.container
+        )
+        let library = (try? await provider.loadExercises()) ?? []
+        let outcome = CoachProposalApplier.apply(proposal, library: library, in: modelContext)
+        coachChat.confirmProposal(
+            for: messageID,
+            note: Self.strengthDayConfirmation(outcome, weekdayName: proposal.weekdayName)
+        )
+    }
+
+    /// The transcript confirmation for an applied strength day.
+    static func strengthDayConfirmation(
+        _ outcome: CoachProposalApplier.StrengthDayOutcome,
+        weekdayName: String
+    ) -> String {
+        switch (outcome.inserted.isEmpty, outcome.skipped.isEmpty) {
+        case (true, true):
+            return "There was nothing in that plan to add."
+        case (true, false):
+            return """
+            Everything I proposed is already in your \(weekdayName) plan \
+            (\(outcome.skipped.joined(separator: ", "))) — nothing to add.
+            """
+        case (false, true):
+            return "Done — added \(outcome.inserted.count) exercises to \(weekdayName)."
+        case (false, false):
+            return """
+            Done — added \(outcome.inserted.count) exercises to \(weekdayName). \
+            Skipped \(outcome.skipped.count) already planned: \(outcome.skipped.joined(separator: ", ")).
+            """
         }
     }
 

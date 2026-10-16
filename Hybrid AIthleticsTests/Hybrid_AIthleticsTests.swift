@@ -1391,6 +1391,14 @@ struct CoachTypeConversionTests {
             #expect(coachType.rawValue == appType.rawValue)
         }
     }
+
+    @Test func muscleGroupConversionRoundTripsAllCases() {
+        for appGroup in MuscleGroup.allCases {
+            let coachGroup = CoachMuscleGroup(from: appGroup)
+            #expect(coachGroup.rawValue == appGroup.rawValue)
+            #expect(MuscleGroup(from: coachGroup) == appGroup)
+        }
+    }
 }
 
 // MARK: - Stub AI Coach Service Tests
@@ -5210,9 +5218,9 @@ struct StrengthBoardPlannerTests {
     }
 }
 
-// MARK: - StrengthCoachExporter Tests
+// MARK: - Coach Strength Conversion Tests
 
-struct StrengthCoachExporterTests {
+struct CoachStrengthConversionTests {
 
     @Test func snapshotCapturesExerciseFields() {
         let exercise = StrengthExercise(
@@ -5252,18 +5260,6 @@ struct StrengthCoachExporterTests {
         #expect(snapshot.plannedReps == 8)
     }
 
-    @Test func jsonIncludesPlannedFieldsOnlyWhenSet() throws {
-        let planned = StrengthExercise(name: "Bench", plannedSets: 3, plannedReps: 8)
-        let plannedJSON = try StrengthCoachExporter.jsonString(from: [planned])
-        #expect(plannedJSON.contains("\"plannedSets\":3"))
-        #expect(plannedJSON.contains("\"plannedReps\":8"))
-
-        let unplanned = StrengthExercise(name: "Curl")
-        let unplannedJSON = try StrengthCoachExporter.jsonString(from: [unplanned])
-        #expect(!unplannedJSON.contains("plannedSets"))
-        #expect(!unplannedJSON.contains("plannedReps"))
-    }
-
     @Test func workoutsAreSortedOldestFirst() {
         let older = StrengthWorkout(date: Date(timeIntervalSince1970: 1_000), weightPounds: 100)
         let newer = StrengthWorkout(date: Date(timeIntervalSince1970: 2_000), weightPounds: 110)
@@ -5277,24 +5273,10 @@ struct StrengthCoachExporterTests {
         let mondaySecond = StrengthExercise(name: "Mon-1", weekdayIndex: 1, sortOrder: 1)
         let mondayOffloaded = StrengthExercise(name: "Mon-Off", weekdayIndex: 1, isOffloaded: true, sortOrder: 0)
         let sunday = StrengthExercise(name: "Sun-0", weekdayIndex: 0, sortOrder: 0)
-        let snapshots = StrengthCoachExporter.snapshots(
+        let snapshots = CoachStrengthExercise.snapshots(
             from: [mondayOffloaded, mondaySecond, sunday, mondayFirst]
         )
         #expect(snapshots.map(\.name) == ["Sun-0", "Mon-0", "Mon-1", "Mon-Off"])
-    }
-
-    @Test func jsonStringSerializesISO8601DatesAndFields() throws {
-        let workout = StrengthWorkout(
-            date: Date(timeIntervalSince1970: 0),
-            weightPounds: 135,
-            recordingType: .averageWeight
-        )
-        let exercise = StrengthExercise(name: "Bench", muscleGroup: .chest, workouts: [workout])
-        let json = try StrengthCoachExporter.jsonString(from: [exercise])
-        #expect(json.contains("\"name\":\"Bench\""))
-        #expect(json.contains("\"muscleGroup\":\"Chest\""))
-        #expect(json.contains("\"recordingType\":\"Average Weight\""))
-        #expect(json.contains("1970-01-01T00:00:00Z"))
     }
 }
 
@@ -5886,6 +5868,165 @@ struct CoachProposalApplierTests {
         #expect(exertionOnly.feeling == nil, "exertion must not imply a feeling")
         #expect(feelingOnly.feeling == 2)
         #expect(feelingOnly.perceivedExertion == nil, "feeling must not imply an exertion")
+    }
+
+    // MARK: strength day
+
+    private func strengthProposal(
+        weekdayIndex: Int = 5,
+        exercises: [PlannedStrengthExercise]
+    ) -> StrengthDayProposal {
+        StrengthDayProposal(
+            weekdayIndex: weekdayIndex,
+            exercises: exercises,
+            rationale: "test rationale"
+        )
+    }
+
+    private func fetchStrength(in context: ModelContext) throws -> [StrengthExercise] {
+        try context.fetch(FetchDescriptor<StrengthExercise>())
+    }
+
+    @Test func strengthDayInsertsTheBatchInOrderAtTheLaneEnd() throws {
+        let context = try makeContext()
+        let existing = StrengthExercise(
+            name: "Plank", muscleGroup: .core, weekdayIndex: 5, sortOrder: 0
+        )
+        context.insert(existing)
+        let otherDay = StrengthExercise(
+            name: "Tuesday Curl", muscleGroup: .biceps, weekdayIndex: 2, sortOrder: 0
+        )
+        context.insert(otherDay)
+
+        let outcome = CoachProposalApplier.apply(
+            strengthProposal(exercises: [
+                PlannedStrengthExercise(name: "Squat", muscleGroup: .quads),
+                PlannedStrengthExercise(name: "Bench Press", muscleGroup: .chest),
+            ]),
+            library: [],
+            in: context
+        )
+
+        #expect(outcome.inserted == ["Squat", "Bench Press"])
+        #expect(outcome.skipped.isEmpty)
+        let friday = try fetchStrength(in: context)
+            .filter { $0.weekdayIndex == 5 }
+            .sorted { $0.sortOrder < $1.sortOrder }
+        #expect(friday.map(\.name) == ["Plank", "Squat", "Bench Press"])
+        #expect(friday.map(\.sortOrder) == [0, 1, 2], "dense order appended after existing")
+        #expect(friday.allSatisfy { !$0.isOffloaded })
+        #expect(otherDay.sortOrder == 0, "other lanes untouched")
+    }
+
+    @Test func strengthDayCarriesTheProposedPlan() throws {
+        let context = try makeContext()
+
+        CoachProposalApplier.apply(
+            strengthProposal(exercises: [
+                PlannedStrengthExercise(
+                    name: "Squat", muscleGroup: .quads, plannedSets: 3, plannedReps: 5
+                ),
+            ]),
+            library: [],
+            in: context
+        )
+
+        let inserted = try #require(try fetchStrength(in: context).first)
+        #expect(inserted.plannedSets == 3)
+        #expect(inserted.plannedReps == 5)
+        #expect(inserted.muscleGroup == .quads)
+        #expect(inserted.libraryExerciseID == nil, "no library match, no provenance")
+    }
+
+    @Test func strengthDayMatchesLibraryNamesForProvenance() throws {
+        let context = try makeContext()
+        let library = [
+            LibraryExercise(
+                id: "barbell-bench-press",
+                name: "Barbell Bench Press",
+                details: "details",
+                muscleGroup: .chest,
+                equipment: "Barbell",
+                difficulty: "Intermediate"
+            ),
+        ]
+
+        let outcome = CoachProposalApplier.apply(
+            strengthProposal(exercises: [
+                // Different case + trailing space: still the library entry.
+                PlannedStrengthExercise(name: "barbell bench press ", muscleGroup: .other),
+            ]),
+            library: library,
+            in: context
+        )
+
+        #expect(outcome.inserted == ["Barbell Bench Press"], "canonical library name")
+        let inserted = try #require(try fetchStrength(in: context).first)
+        #expect(inserted.libraryExerciseID == "barbell-bench-press")
+        #expect(inserted.muscleGroup == .chest, "library group wins over the proposal's")
+    }
+
+    @Test func strengthDaySkipsNamesAlreadyInTheActiveLane() throws {
+        let context = try makeContext()
+        context.insert(StrengthExercise(
+            name: "Bench Press", muscleGroup: .chest, weekdayIndex: 5, sortOrder: 0
+        ))
+
+        let outcome = CoachProposalApplier.apply(
+            strengthProposal(exercises: [
+                PlannedStrengthExercise(name: "bench press", muscleGroup: .chest),
+                PlannedStrengthExercise(name: "Row", muscleGroup: .back),
+            ]),
+            library: [],
+            in: context
+        )
+
+        #expect(outcome.skipped == ["bench press"])
+        #expect(outcome.inserted == ["Row"])
+        let friday = try fetchStrength(in: context)
+        #expect(friday.count == 2, "the duplicate was not inserted")
+        #expect(friday.contains { $0.name == "Bench Press" && $0.sortOrder == 0 })
+    }
+
+    @Test func strengthDaySkipsDuplicatesInsideTheProposalItself() throws {
+        let context = try makeContext()
+
+        let outcome = CoachProposalApplier.apply(
+            strengthProposal(exercises: [
+                PlannedStrengthExercise(name: "Squat", muscleGroup: .quads),
+                PlannedStrengthExercise(name: "Squat ", muscleGroup: .quads),
+            ]),
+            library: [],
+            in: context
+        )
+
+        #expect(outcome.inserted == ["Squat"])
+        #expect(outcome.skipped == ["Squat "])
+        #expect(try fetchStrength(in: context).count == 1)
+    }
+
+    @Test func strengthDayIgnoresAnOffloadedSameName() throws {
+        let context = try makeContext()
+        context.insert(StrengthExercise(
+            name: "Bench Press", muscleGroup: .chest, weekdayIndex: 5,
+            isOffloaded: true, sortOrder: 0
+        ))
+
+        let outcome = CoachProposalApplier.apply(
+            strengthProposal(exercises: [
+                PlannedStrengthExercise(name: "Bench Press", muscleGroup: .chest),
+            ]),
+            library: [],
+            in: context
+        )
+
+        // Offloaded is deliberately out of the plan; re-planning the lift is
+        // the point of accepting the proposal, not a duplicate.
+        #expect(outcome.inserted == ["Bench Press"])
+        #expect(outcome.skipped.isEmpty)
+        let friday = try fetchStrength(in: context)
+        #expect(friday.count == 2)
+        #expect(friday.contains { !$0.isOffloaded && $0.name == "Bench Press" })
     }
 }
 

@@ -72,6 +72,8 @@ public enum CoachToolDecoder {
             return .suggestScheduleChange(try scheduleChange(from: arguments))
         case .recordWorkout:
             return .recordWorkout(try workout(from: arguments))
+        case .planStrengthDay:
+            return .planStrengthDay(try strengthDay(from: arguments))
         }
     }
 
@@ -122,10 +124,10 @@ public enum CoachToolDecoder {
             exerciseType: type,
             distanceMiles: try optionalDistance("distance_miles", in: arguments),
             durationSeconds: try optionalDuration("duration_seconds", in: arguments),
-            perceivedExertion: try optionalRating(
+            perceivedExertion: try optionalBoundedInteger(
                 "perceived_exertion", in: arguments, range: 1...10
             ),
-            feeling: try optionalRating("feeling", in: arguments, range: 1...5),
+            feeling: try optionalBoundedInteger("feeling", in: arguments, range: 1...5),
             notes: optionalString("notes", in: arguments)
         )
         // A workout the athlete has not sized is not a workout they described.
@@ -137,6 +139,72 @@ public enum CoachToolDecoder {
             throw CoachToolDecodeError.missingArgument("distance_miles or duration_seconds")
         }
         return proposal
+    }
+
+    /// Decodes a strength-day proposal: a weekday lane plus the batch of
+    /// exercises to fill it with.
+    private static func strengthDay(
+        from arguments: [String: Any]
+    ) throws -> StrengthDayProposal {
+        let rawWeekday = try requiredString("weekday", in: arguments)
+        guard let weekdayIndex = StrengthDayProposal.weekdayNames.firstIndex(where: {
+            $0.caseInsensitiveCompare(rawWeekday) == .orderedSame
+        }) else {
+            throw CoachToolDecodeError.invalidArgument(
+                name: "weekday",
+                reason: "\"\(rawWeekday)\" is not a day of the week"
+            )
+        }
+        guard let rawExercises = arguments["exercises"] as? [[String: Any]] else {
+            throw CoachToolDecodeError.missingArgument("exercises")
+        }
+        guard !rawExercises.isEmpty else {
+            throw CoachToolDecodeError.invalidArgument(
+                name: "exercises",
+                reason: "a strength day needs at least one exercise"
+            )
+        }
+        guard rawExercises.count <= StrengthDayProposal.maxExercises else {
+            throw CoachToolDecodeError.invalidArgument(
+                name: "exercises",
+                reason: "\(rawExercises.count) exercises is more than one day holds (max \(StrengthDayProposal.maxExercises))"
+            )
+        }
+        return StrengthDayProposal(
+            weekdayIndex: weekdayIndex,
+            exercises: try rawExercises.map(plannedStrengthExercise(from:)),
+            rationale: try requiredString("rationale", in: arguments)
+        )
+    }
+
+    /// Decodes one entry of a strength-day proposal.
+    private static func plannedStrengthExercise(
+        from arguments: [String: Any]
+    ) throws -> PlannedStrengthExercise {
+        let rawGroup = try requiredString("muscle_group", in: arguments)
+        guard let group = CoachMuscleGroup.allCases.first(where: {
+            $0.rawValue.caseInsensitiveCompare(rawGroup) == .orderedSame
+        }) else {
+            throw CoachToolDecodeError.invalidArgument(
+                name: "muscle_group",
+                reason: "\"\(rawGroup)\" is not a known muscle group"
+            )
+        }
+        // Ranges mirror the app's `StrengthPlanDraft` steppers (AICoachCore
+        // cannot import app code — same deliberate duplication as
+        // `feelingDescriptor`). A plan exists only when both are set, so one
+        // without the other is a mistake worth sending back.
+        let sets = try optionalBoundedInteger("sets", in: arguments, range: 1...20)
+        let reps = try optionalBoundedInteger("reps", in: arguments, range: 1...100)
+        if (sets == nil) != (reps == nil) {
+            throw CoachToolDecodeError.missingArgument(sets == nil ? "sets" : "reps")
+        }
+        return PlannedStrengthExercise(
+            name: try requiredString("name", in: arguments),
+            muscleGroup: group,
+            plannedSets: sets,
+            plannedReps: reps
+        )
     }
 
     // MARK: - Field readers
@@ -216,11 +284,11 @@ public enum CoachToolDecoder {
         return Int(value)
     }
 
-    /// Reads a subjective rating, rejecting out-of-range values rather than
-    /// clamping them — a model that says "RPE 15" has misunderstood the scale,
-    /// and silently storing 10 would put a number the athlete never gave into
-    /// their training history.
-    private static func optionalRating(
+    /// Reads a bounded whole number, rejecting out-of-range values rather
+    /// than clamping them — a model that says "RPE 15" or "400 sets" has
+    /// misunderstood the scale, and silently storing the nearest bound would
+    /// put a number the athlete never gave into their plan or history.
+    private static func optionalBoundedInteger(
         _ key: String,
         in arguments: [String: Any],
         range: ClosedRange<Int>

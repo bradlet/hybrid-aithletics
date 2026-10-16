@@ -123,6 +123,10 @@ public enum AICoachPromptBuilder {
         - Use the chat tool for ordinary replies. Only propose a schedule change when \
         the athlete asks about changing their plan, and only record a workout when \
         they tell you they did one.
+        - Only plan strength work when the athlete asks for it. One \
+        plan_strength_day call carries the whole day; never split a day across \
+        several calls. The strength board is a weekly template, so the tool \
+        takes a weekday name, never a date.
         - Never invent a date, a distance, or a rating the athlete did not give you.
         - Every date you emit is an absolute YYYY-MM-DD date worked out from today's \
         date above: "today" is \(isoDate(startOfToday)), "yesterday" is \
@@ -201,6 +205,22 @@ public enum AICoachPromptBuilder {
         } else {
             for exercise in request.upcomingExercises {
                 sections.append(exerciseLine(exercise, metric: request.useMetricUnits))
+            }
+        }
+        sections.append("")
+
+        // Active lanes only: an offloaded exercise is deliberately out of the
+        // week's plan, so showing it as planned would invite the coach to
+        // program around work the athlete has set aside.
+        let activeStrength = request.strengthExercises
+            .filter { !$0.isOffloaded }
+            .sorted { $0.weekdayIndex < $1.weekdayIndex }
+        sections.append("Strength board (weekly plan, \(activeStrength.count) exercises):")
+        if activeStrength.isEmpty {
+            sections.append("- (no strength exercises planned)")
+        } else {
+            for exercise in activeStrength {
+                sections.append(strengthLine(exercise))
             }
         }
         sections.append("")
@@ -306,5 +326,25 @@ public enum AICoachPromptBuilder {
         let distance = exercise.distanceMiles.formattedDistance(metric: metric)
         let duration = exercise.durationSeconds.formattedDuration
         return "- \(date) \(exercise.type.rawValue), \(distance), \(duration)"
+    }
+
+    /// Formats a single strength-board exercise as one prompt line, e.g.
+    /// `- Friday: Barbell Bench Press (Chest), 3×8`. The plan badge appears
+    /// only when both sets and reps are set, mirroring
+    /// `StrengthExercise.plannedSummary`.
+    public static func strengthLine(_ exercise: CoachStrengthExercise) -> String {
+        var line = "- \(weekdayName(exercise.weekdayIndex)): \(exercise.name) (\(exercise.muscleGroup))"
+        if let sets = exercise.plannedSets, let reps = exercise.plannedReps {
+            line += ", \(sets)×\(reps)"
+        }
+        return line
+    }
+
+    /// The day name for a lane index, tolerating an out-of-range value from
+    /// synced data rather than trapping.
+    private static func weekdayName(_ weekdayIndex: Int) -> String {
+        let names = StrengthDayProposal.weekdayNames
+        guard names.indices.contains(weekdayIndex) else { return "Day \(weekdayIndex)" }
+        return names[weekdayIndex]
     }
 }

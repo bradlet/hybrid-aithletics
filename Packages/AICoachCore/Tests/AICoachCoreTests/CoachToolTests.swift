@@ -22,6 +22,9 @@ struct CoachToolSchemaTests {
     private var suggestScheduleChange: [String: any Sendable] {
         CoachToolSchemas.suggestScheduleChange(today: today)
     }
+    private var planStrengthDay: [String: any Sendable] {
+        CoachToolSchemas.planStrengthDay
+    }
     private var recordWorkout: [String: any Sendable] {
         CoachToolSchemas.recordWorkout(today: today)
     }
@@ -109,6 +112,59 @@ struct CoachToolSchemaTests {
     @Test func recordWorkoutRequiresOnlyDateAndType() {
         // Everything else is something the athlete may simply not have said.
         #expect(Set(required(recordWorkout)) == Set(["date", "exercise_type"]))
+    }
+
+    @Test func strengthDayRequiresWeekdayExercisesAndRationale() {
+        #expect(Set(required(planStrengthDay)) == Set(["weekday", "exercises", "rationale"]))
+    }
+
+    @Test func strengthDayWeekdayEnumeratesEveryDayName() {
+        let weekday = properties(planStrengthDay)["weekday"] as! [String: any Sendable]
+        #expect(weekday["enum"] as! [String] == StrengthDayProposal.weekdayNames)
+    }
+
+    @Test func strengthDayMuscleGroupEnumeratesEveryCase() {
+        let group = itemProperties(planStrengthDay)["muscle_group"] as! [String: any Sendable]
+        #expect(group["enum"] as! [String] == CoachMuscleGroup.allCases.map(\.rawValue))
+    }
+
+    @Test func strengthDayExercisesIsABoundedArrayOfObjects() {
+        let exercises = properties(planStrengthDay)["exercises"] as! [String: any Sendable]
+        #expect(exercises["type"] as! String == "array")
+        #expect(exercises["minItems"] as! Int == 1)
+        #expect(exercises["maxItems"] as! Int == StrengthDayProposal.maxExercises)
+        let items = exerciseItems(planStrengthDay)
+        #expect(items["type"] as! String == "object")
+        #expect(items["required"] as! [String] == ["name", "muscle_group"])
+    }
+
+    @Test func strengthDayExerciseItemPropertiesAreAllDescribed() {
+        for (name, property) in itemProperties(planStrengthDay) {
+            let property = property as! [String: any Sendable]
+            let description = property["description"] as? String
+            #expect(description?.isEmpty == false, "item \(name) needs a description")
+        }
+    }
+
+    @Test func strengthDayDescriptionAsksForTheWholeDayInOneCall() {
+        // A full-body request split across seven calls would lose six of them
+        // to first-proposal-wins, so batching has to be the schema's ask.
+        let description = fn(planStrengthDay)["description"] as! String
+        #expect(description.contains("ONE call"))
+        #expect(description.lowercased().contains("muscle group"))
+    }
+
+    /// Reads the `items` sub-schema out of the tool's `exercises` property.
+    private func exerciseItems(_ schema: [String: any Sendable]) -> [String: any Sendable] {
+        let exercises = properties(schema)["exercises"] as! [String: any Sendable]
+        return exercises["items"] as! [String: any Sendable]
+    }
+
+    /// Reads the properties of the `exercises` array's item object. Unlike the
+    /// top-level helpers, the item schema is not wrapped in a function
+    /// envelope, so its `properties` sit at its own top level.
+    private func itemProperties(_ schema: [String: any Sendable]) -> [String: any Sendable] {
+        exerciseItems(schema)["properties"] as! [String: any Sendable]
     }
 
     @Test func dateDescriptionsNameTodayRatherThanAnExample() {
@@ -410,6 +466,183 @@ struct CoachToolDecoderTests {
             )
         }
     }
+
+    // MARK: plan_strength_day
+
+    /// A valid two-exercise argument object, mutable per test.
+    private func strengthDayArguments() -> [String: Any] {
+        [
+            "weekday": "Friday",
+            "exercises": [
+                ["name": "Barbell Back Squat", "muscle_group": "Quads", "sets": 3, "reps": 5],
+                ["name": "Barbell Bench Press", "muscle_group": "Chest"],
+            ],
+            "rationale": "Full body coverage for Friday.",
+        ]
+    }
+
+    @Test func decodesStrengthDay() throws {
+        let action = try CoachToolDecoder.decode(
+            name: "plan_strength_day",
+            arguments: strengthDayArguments()
+        )
+        #expect(action == .planStrengthDay(StrengthDayProposal(
+            weekdayIndex: 5,
+            exercises: [
+                PlannedStrengthExercise(
+                    name: "Barbell Back Squat", muscleGroup: .quads,
+                    plannedSets: 3, plannedReps: 5
+                ),
+                PlannedStrengthExercise(name: "Barbell Bench Press", muscleGroup: .chest),
+            ],
+            rationale: "Full body coverage for Friday."
+        )))
+        #expect(action.tool == .planStrengthDay)
+    }
+
+    @Test func strengthDayWeekdayIsCaseInsensitive() throws {
+        var arguments = strengthDayArguments()
+        arguments["weekday"] = "friday"
+        let action = try CoachToolDecoder.decode(
+            name: "plan_strength_day", arguments: arguments
+        )
+        guard case .planStrengthDay(let proposal) = action else {
+            Issue.record("expected a strength day proposal")
+            return
+        }
+        #expect(proposal.weekdayIndex == 5)
+    }
+
+    @Test func strengthDayRejectsUnknownWeekday() {
+        var arguments = strengthDayArguments()
+        arguments["weekday"] = "Freeday"
+        #expect(throws: CoachToolDecodeError.self) {
+            try CoachToolDecoder.decode(name: "plan_strength_day", arguments: arguments)
+        }
+    }
+
+    @Test func strengthDayRequiresAWeekday() {
+        var arguments = strengthDayArguments()
+        arguments.removeValue(forKey: "weekday")
+        #expect(throws: CoachToolDecodeError.missingArgument("weekday")) {
+            try CoachToolDecoder.decode(name: "plan_strength_day", arguments: arguments)
+        }
+    }
+
+    @Test func strengthDayRequiresExercises() {
+        var arguments = strengthDayArguments()
+        arguments.removeValue(forKey: "exercises")
+        #expect(throws: CoachToolDecodeError.missingArgument("exercises")) {
+            try CoachToolDecoder.decode(name: "plan_strength_day", arguments: arguments)
+        }
+    }
+
+    @Test func strengthDayRejectsAnEmptyExerciseList() {
+        var arguments = strengthDayArguments()
+        arguments["exercises"] = [[String: Any]]()
+        #expect(throws: CoachToolDecodeError.self) {
+            try CoachToolDecoder.decode(name: "plan_strength_day", arguments: arguments)
+        }
+    }
+
+    @Test func strengthDayCapsTheExerciseList() {
+        var arguments = strengthDayArguments()
+        arguments["exercises"] = (0..<StrengthDayProposal.maxExercises + 1).map {
+            ["name": "Exercise \($0)", "muscle_group": "Core"]
+        }
+        #expect(throws: CoachToolDecodeError.self) {
+            try CoachToolDecoder.decode(name: "plan_strength_day", arguments: arguments)
+        }
+    }
+
+    @Test func strengthDayAcceptsTheExerciseCapExactly() throws {
+        var arguments = strengthDayArguments()
+        arguments["exercises"] = (0..<StrengthDayProposal.maxExercises).map {
+            ["name": "Exercise \($0)", "muscle_group": "Core"]
+        }
+        let action = try CoachToolDecoder.decode(name: "plan_strength_day", arguments: arguments)
+        guard case .planStrengthDay(let proposal) = action else {
+            Issue.record("expected a strength day proposal")
+            return
+        }
+        #expect(proposal.exercises.count == StrengthDayProposal.maxExercises)
+    }
+
+    @Test func strengthDayMuscleGroupIsCaseInsensitive() throws {
+        var arguments = strengthDayArguments()
+        arguments["exercises"] = [["name": "Curl", "muscle_group": "biceps"]]
+        let action = try CoachToolDecoder.decode(name: "plan_strength_day", arguments: arguments)
+        guard case .planStrengthDay(let proposal) = action else {
+            Issue.record("expected a strength day proposal")
+            return
+        }
+        #expect(proposal.exercises.first?.muscleGroup == .biceps)
+    }
+
+    @Test func strengthDayRejectsUnknownMuscleGroup() {
+        var arguments = strengthDayArguments()
+        arguments["exercises"] = [["name": "Face Pull", "muscle_group": "Face"]]
+        #expect(throws: CoachToolDecodeError.self) {
+            try CoachToolDecoder.decode(name: "plan_strength_day", arguments: arguments)
+        }
+    }
+
+    @Test func strengthDayRequiresSetsAndRepsTogether() {
+        // A plan exists only when both are set; one alone is a mistake, not a
+        // default to invent.
+        for (present, missing) in [("sets", "reps"), ("reps", "sets")] {
+            var arguments = strengthDayArguments()
+            arguments["exercises"] = [["name": "Squat", "muscle_group": "Quads", present: 3]]
+            #expect(throws: CoachToolDecodeError.missingArgument(missing)) {
+                try CoachToolDecoder.decode(name: "plan_strength_day", arguments: arguments)
+            }
+        }
+    }
+
+    @Test func strengthDayRejectsOutOfRangePlanNumbers() {
+        // Rejected, never clamped — same rule as the subjective ratings.
+        for (key, value) in [("sets", 0), ("sets", 21), ("reps", 0), ("reps", 101)] {
+            var exercise: [String: Any] = [
+                "name": "Squat", "muscle_group": "Quads", "sets": 3, "reps": 8,
+            ]
+            exercise[key] = value
+            var arguments = strengthDayArguments()
+            arguments["exercises"] = [exercise]
+            #expect(throws: CoachToolDecodeError.self) {
+                try CoachToolDecoder.decode(name: "plan_strength_day", arguments: arguments)
+            }
+        }
+    }
+
+    @Test func strengthDayAcceptsPlanNumbersAsStrings() throws {
+        var arguments = strengthDayArguments()
+        arguments["exercises"] = [[
+            "name": "Squat", "muscle_group": "Quads", "sets": "3", "reps": "5",
+        ]]
+        let action = try CoachToolDecoder.decode(name: "plan_strength_day", arguments: arguments)
+        guard case .planStrengthDay(let proposal) = action else {
+            Issue.record("expected a strength day proposal")
+            return
+        }
+        #expect(proposal.exercises.first?.plannedSets == 3)
+        #expect(proposal.exercises.first?.plannedReps == 5)
+    }
+
+    @Test func strengthDayRejectsBlankExerciseNames() {
+        var arguments = strengthDayArguments()
+        arguments["exercises"] = [["name": "   ", "muscle_group": "Core"]]
+        #expect(throws: CoachToolDecodeError.missingArgument("name")) {
+            try CoachToolDecoder.decode(name: "plan_strength_day", arguments: arguments)
+        }
+    }
+
+    @Test func strengthDayRequiresRationale() {
+        var arguments = strengthDayArguments()
+        arguments.removeValue(forKey: "rationale")
+        #expect(throws: CoachToolDecodeError.missingArgument("rationale")) {
+            try CoachToolDecoder.decode(name: "plan_strength_day", arguments: arguments)
+        }
+    }
 }
 
 // MARK: - Workout Proposal Codable Tests
@@ -447,6 +680,28 @@ struct CoachProposalCodableTests {
         #expect(try JSONDecoder().decode(ScheduleChangeProposal.self, from: data) == original)
     }
 
+    @Test func strengthDayProposalRoundTrips() throws {
+        let original = StrengthDayProposal(
+            weekdayIndex: 5,
+            exercises: [
+                PlannedStrengthExercise(
+                    name: "Barbell Back Squat", muscleGroup: .quads,
+                    plannedSets: 3, plannedReps: 5
+                ),
+                PlannedStrengthExercise(name: "Plank", muscleGroup: .core),
+            ],
+            rationale: "Legs and trunk."
+        )
+        let data = try JSONEncoder().encode(original)
+        #expect(try JSONDecoder().decode(StrengthDayProposal.self, from: data) == original)
+    }
+
+    @Test func strengthDayWeekdayNameResolvesTheLane() {
+        #expect(StrengthDayProposal(weekdayIndex: 5, exercises: [], rationale: "").weekdayName == "Friday")
+        // An out-of-range index from model data reads as a label, not a crash.
+        #expect(StrengthDayProposal(weekdayIndex: 9, exercises: [], rationale: "").weekdayName == "Day 9")
+    }
+
     @Test func actionReportsItsTool() {
         #expect(CoachAction.reply("hi").tool == .chat)
         #expect(CoachAction.recordWorkout(WorkoutProposal(
@@ -455,6 +710,9 @@ struct CoachProposalCodableTests {
         #expect(CoachAction.suggestScheduleChange(ScheduleChangeProposal(
             date: Date(), kind: .remove, rationale: "x"
         )).tool == .suggestScheduleChange)
+        #expect(CoachAction.planStrengthDay(StrengthDayProposal(
+            weekdayIndex: 5, exercises: [], rationale: "x"
+        )).tool == .planStrengthDay)
     }
 }
 
@@ -554,6 +812,14 @@ struct CoachChatPromptTests {
         #expect(preamble.contains("Gather every value before you call a tool"))
         #expect(preamble.contains("record a workout for me"))
         #expect(preamble.contains("One tool call per reply"))
+    }
+
+    @Test func chatPreambleFramesStrengthPlanningAsWeekdaysNotDates() {
+        // The strength board is a weekly template; the model must not try to
+        // date a strength day the way it dates an aerobic session.
+        #expect(preamble.contains("plan_strength_day"))
+        #expect(preamble.contains("weekday name, never a date"))
+        #expect(preamble.contains("the whole day"))
     }
 
     @Test func systemTurnCarriesTheAnchorEvenWithoutContext() {

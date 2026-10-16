@@ -23,6 +23,8 @@ struct CoachChatView: View {
     let onAcceptWorkout: (WorkoutProposal, UUID) -> Void
     /// Called when the athlete accepts a schedule-change proposal.
     let onAcceptScheduleChange: (ScheduleChangeProposal, UUID) -> Void
+    /// Called when the athlete accepts a strength-day proposal.
+    let onAcceptStrengthDay: (StrengthDayProposal, UUID) -> Void
 
     @State private var draft: String = ""
 
@@ -392,6 +394,8 @@ struct CoachChatView: View {
             onAcceptWorkout(proposal, messageID)
         case .suggestScheduleChange(let proposal):
             onAcceptScheduleChange(proposal, messageID)
+        case .planStrengthDay(let proposal):
+            onAcceptStrengthDay(proposal, messageID)
         case .reply:
             store.resolveProposal(for: messageID)
         }
@@ -494,6 +498,7 @@ struct ProposalCard: View {
         switch action {
         case .recordWorkout: "square.and.pencil"
         case .suggestScheduleChange: "calendar.badge.clock"
+        case .planStrengthDay: "dumbbell"
         case .reply: "text.bubble"
         }
     }
@@ -502,6 +507,7 @@ struct ProposalCard: View {
         switch action {
         case .recordWorkout: "Record this workout?"
         case .suggestScheduleChange: "Change your plan?"
+        case .planStrengthDay: "Plan this strength day?"
         case .reply: "Suggestion"
         }
     }
@@ -556,6 +562,20 @@ struct ProposalCard: View {
                 if let type = proposal.exerciseType {
                     lines.append("Add a \(type.rawValue)")
                 }
+            }
+            lines.append(proposal.rationale)
+            return lines
+
+        case .planStrengthDay(let proposal):
+            var lines = [
+                "\(proposal.weekdayName) · \(proposal.exercises.count) exercises"
+            ]
+            for exercise in proposal.exercises {
+                var line = "\(exercise.name) — \(exercise.muscleGroup.rawValue)"
+                if let sets = exercise.plannedSets, let reps = exercise.plannedReps {
+                    line += ", \(sets)×\(reps)"
+                }
+                lines.append(line)
             }
             lines.append(proposal.rationale)
             return lines

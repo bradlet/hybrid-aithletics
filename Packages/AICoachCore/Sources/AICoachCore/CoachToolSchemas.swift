@@ -25,7 +25,12 @@ public enum CoachToolSchemas {
     ///   into the call verbatim.
     /// - Returns: Tool schemas in presentation order.
     public static func all(today: Date) -> [[String: any Sendable]] {
-        [chat, suggestScheduleChange(today: today), recordWorkout(today: today)]
+        [
+            chat,
+            suggestScheduleChange(today: today),
+            planStrengthDay,
+            recordWorkout(today: today),
+        ]
     }
 
     /// Date format the model is told to emit, and that `CoachToolDecoder` parses.
@@ -85,6 +90,60 @@ public enum CoachToolSchemas {
                 "rationale": string("One or two sentences on why this change helps."),
             ],
             required: ["date", "kind", "rationale"]
+        )
+    }
+
+    // MARK: - plan_strength_day
+
+    /// Propose a batch of strength exercises for one day-of-week lane.
+    ///
+    /// Carries no date argument: the strength board is a weekly template, so
+    /// the tool takes a weekday name — which is also how the athlete phrases
+    /// the request ("set up a full body routine on Friday").
+    public static var planStrengthDay: [String: any Sendable] {
+        function(
+            name: CoachTool.planStrengthDay.rawValue,
+            description: """
+            Propose a strength training day: a batch of exercises to add to one \
+            weekday's lane on the athlete's weekly strength board. Use this when \
+            the athlete asks you to set up, plan, or change strength work for a \
+            day of the week. Put the WHOLE day in ONE call — when the athlete \
+            asks for a full body routine, span several muscle groups (quads or \
+            glutes, chest, back, shoulders, arms, core) with one exercise each. \
+            The athlete reviews and confirms every proposal, so explain your \
+            reasoning in "rationale".
+            """,
+            properties: [
+                "weekday": enumeration(
+                    StrengthDayProposal.weekdayNames,
+                    "Which day of the week to plan. The board is a weekly template, so this is a weekday name, never a date."
+                ),
+                "exercises": [
+                    "type": "array",
+                    "description": """
+                    The exercises for the day, in the order they should be \
+                    performed. One exercise per muscle group the day is meant \
+                    to cover.
+                    """,
+                    "minItems": 1,
+                    "maxItems": StrengthDayProposal.maxExercises,
+                    "items": [
+                        "type": "object",
+                        "properties": [
+                            "name": string("The exercise's common name, e.g. \"Barbell Bench Press\"."),
+                            "muscle_group": enumeration(
+                                CoachMuscleGroup.allCases.map(\.rawValue),
+                                "The primary muscle group the exercise works."
+                            ),
+                            "sets": integer("Planned sets, 1–20. Only together with reps."),
+                            "reps": integer("Planned reps per set, 1–100. Only together with sets."),
+                        ] as [String: any Sendable],
+                        "required": ["name", "muscle_group"],
+                    ] as [String: any Sendable],
+                ] as [String: any Sendable],
+                "rationale": string("One or two sentences on why this day helps."),
+            ],
+            required: ["weekday", "exercises", "rationale"]
         )
     }
 

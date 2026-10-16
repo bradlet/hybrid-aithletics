@@ -331,6 +331,90 @@ struct AICoachPromptBuilderTests {
         #expect(AICoachPromptBuilder.buildDataSections(for: request).contains("mi"))
         #expect(AICoachPromptBuilder.buildDataSections(for: metricRequest).contains("km"))
     }
+
+    // MARK: - Strength board section
+
+    private func makeStrength(
+        name: String = "Barbell Bench Press",
+        muscleGroup: String = "Chest",
+        weekdayIndex: Int = 5,
+        isOffloaded: Bool = false,
+        plannedSets: Int? = nil,
+        plannedReps: Int? = nil
+    ) -> CoachStrengthExercise {
+        CoachStrengthExercise(
+            name: name,
+            muscleGroup: muscleGroup,
+            weekdayIndex: weekdayIndex,
+            isOffloaded: isOffloaded,
+            plannedSets: plannedSets,
+            plannedReps: plannedReps
+        )
+    }
+
+    private func strengthRequest(
+        _ exercises: [CoachStrengthExercise]
+    ) -> CoachingRequest {
+        CoachingRequest(
+            recentWorkouts: [],
+            upcomingExercises: [],
+            strengthExercises: exercises,
+            useMetricUnits: false
+        )
+    }
+
+    @Test func dataSectionsRendersTheStrengthBoard() {
+        let sections = AICoachPromptBuilder.buildDataSections(for: strengthRequest([
+            makeStrength(plannedSets: 3, plannedReps: 8),
+        ]))
+        #expect(sections.contains("Strength board (weekly plan, 1 exercises)"))
+        #expect(sections.contains("- Friday: Barbell Bench Press (Chest), 3×8"))
+    }
+
+    @Test func dataSectionsNotesAnEmptyStrengthBoard() {
+        let sections = AICoachPromptBuilder.buildDataSections(for: strengthRequest([]))
+        #expect(sections.contains("Strength board (weekly plan, 0 exercises)"))
+        #expect(sections.contains("(no strength exercises planned)"))
+    }
+
+    @Test func strengthBoardExcludesOffloadedExercises() {
+        // Offloaded is deliberately out of the week's plan; listing it would
+        // invite the coach to program around work the athlete set aside.
+        let sections = AICoachPromptBuilder.buildDataSections(for: strengthRequest([
+            makeStrength(name: "Active Curl", weekdayIndex: 2),
+            makeStrength(name: "Shelved Press", weekdayIndex: 2, isOffloaded: true),
+        ]))
+        #expect(sections.contains("Active Curl"))
+        #expect(!sections.contains("Shelved Press"))
+        #expect(sections.contains("1 exercises)"))
+    }
+
+    @Test func strengthBoardSortsByWeekdayLane() {
+        let sections = AICoachPromptBuilder.buildDataSections(for: strengthRequest([
+            makeStrength(name: "Friday Lift", weekdayIndex: 5),
+            makeStrength(name: "Monday Lift", weekdayIndex: 1),
+        ]))
+        let monday = sections.range(of: "Monday Lift")!.lowerBound
+        let friday = sections.range(of: "Friday Lift")!.lowerBound
+        #expect(monday < friday)
+    }
+
+    @Test func strengthLineShowsThePlanOnlyWhenSetsAndRepsAreBothSet() {
+        let planned = AICoachPromptBuilder.strengthLine(
+            makeStrength(plannedSets: 4, plannedReps: 6)
+        )
+        let setsOnly = AICoachPromptBuilder.strengthLine(makeStrength(plannedSets: 4))
+        let unplanned = AICoachPromptBuilder.strengthLine(makeStrength())
+        #expect(planned.hasSuffix(", 4×6"))
+        #expect(!setsOnly.contains("×"))
+        #expect(!unplanned.contains("×"))
+    }
+
+    @Test func strengthLineToleratesAnOutOfRangeWeekdayIndex() {
+        // Synced data from a newer schema must not trap the prompt builder.
+        let line = AICoachPromptBuilder.strengthLine(makeStrength(weekdayIndex: 9))
+        #expect(line.contains("Day 9"))
+    }
 }
 
 // MARK: - Distance Formatting Tests

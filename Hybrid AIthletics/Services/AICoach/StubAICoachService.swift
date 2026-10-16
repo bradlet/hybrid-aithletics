@@ -104,6 +104,8 @@ final class StubAICoachService: AICoachService, @unchecked Sendable {
         static let record = "record"
         /// Produces a `suggest_schedule_change` proposal.
         static let scheduleChange = "change my plan"
+        /// Produces a `plan_strength_day` proposal.
+        static let strengthDay = "strength day"
         /// Produces a rejected tool call.
         static let reject = "garble"
     }
@@ -154,6 +156,28 @@ final class StubAICoachService: AICoachService, @unchecked Sendable {
                     kind: .adjustDistance,
                     distanceMiles: 4.0,
                     rationale: "Your recent RPE suggests backing off slightly."
+                )))
+            ]
+        }
+        if lowercased.contains(ChatTrigger.strengthDay) {
+            return textChunks("Here is a full body day for Friday.") + [
+                .action(.planStrengthDay(StrengthDayProposal(
+                    weekdayIndex: 5,
+                    exercises: [
+                        PlannedStrengthExercise(
+                            name: "Barbell Back Squat", muscleGroup: .quads,
+                            plannedSets: 3, plannedReps: 5
+                        ),
+                        PlannedStrengthExercise(
+                            name: "Barbell Bench Press", muscleGroup: .chest,
+                            plannedSets: 3, plannedReps: 8
+                        ),
+                        PlannedStrengthExercise(
+                            name: "Pull-Up", muscleGroup: .back,
+                            plannedSets: 3, plannedReps: 8
+                        ),
+                    ],
+                    rationale: "A balanced full body session: legs, chest and back."
                 )))
             ]
         }

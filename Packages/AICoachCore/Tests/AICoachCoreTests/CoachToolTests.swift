@@ -165,6 +165,26 @@ struct CoachToolSchemaTests {
         #expect(description.contains("never replaces"))
     }
 
+    @Test func strengthDayDescriptionSaysTheCoachChoosesTheExercises() {
+        // The model was calling plan_strength_day with a weekday and a
+        // rationale but no exercises, writing its picks in prose. The
+        // description now states who programs the day and that a call
+        // without exercises is invalid.
+        let description = fn(planStrengthDay)["description"] as! String
+        #expect(description.contains("YOU choose the exercises"))
+        #expect(description.contains("a call without exercises is invalid"))
+    }
+
+    @Test func strengthDayExercisesDescriptionIsMarkedRequired() {
+        // A 4B model reads the schema's "required" array weakly at best; the
+        // field's own description has to carry the requirement too.
+        let exercises = properties(planStrengthDay)["exercises"] as! [String: any Sendable]
+        let description = exercises["description"] as! String
+        #expect(description.contains("REQUIRED"))
+        #expect(description.contains("\"name\""))
+        #expect(description.contains("\"muscle_group\""))
+    }
+
     @Test func strengthUpdateRequiresWeekdayExerciseChangeAndRationale() {
         #expect(
             Set(required(updateStrengthExercise))
@@ -1025,6 +1045,30 @@ struct CoachChatPromptTests {
         // update_strength_exercise changes what is already on the board.
         #expect(preamble.contains("update_strength_exercise"))
         #expect(preamble.contains("appends, never replaces"))
+    }
+
+    @Test func chatPreambleSpellsOutPlanStrengthDayRequiredFields() {
+        // The failure this guards: plan_strength_day arrived with a weekday
+        // and a rationale but no "exercises" — the picks were in the prose.
+        // The preamble has to name the fields and say the coach, not the
+        // athlete, chooses the lifts.
+        #expect(preamble.contains("plan_strength_day requires"))
+        #expect(preamble.contains("\"exercises\""))
+        #expect(preamble.contains("\"name\""))
+        #expect(preamble.contains("\"muscle_group\""))
+        #expect(preamble.contains("YOU choose the exercises"))
+    }
+
+    @Test func chatPreambleSpellsOutStrengthUpdateRequiredFields() {
+        #expect(preamble.contains("update_strength_exercise requires"))
+        #expect(preamble.contains("\"change\""))
+        #expect(preamble.contains("\"new_weekday\""))
+    }
+
+    @Test func chatPreambleSaysFieldsGoInTheCallNotTheReply() {
+        // Structured values belong in the call's fields; a plan written only
+        // in the reply text decodes as nothing.
+        #expect(preamble.contains("never only in your reply text"))
     }
 
     @Test func systemTurnCarriesTheAnchorEvenWithoutContext() {

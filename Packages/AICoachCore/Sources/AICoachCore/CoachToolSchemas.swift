@@ -114,7 +114,10 @@ public enum CoachToolSchemas {
             exercise, use update_strength_exercise instead. When the athlete \
             asks for a full body routine, put the WHOLE day in ONE call and \
             span several muscle groups (quads or glutes, chest, back, \
-            shoulders, arms, core) with one exercise each. The athlete reviews \
+            shoulders, arms, core) with one exercise each. YOU choose the \
+            exercises — the athlete is asking you to program the day, not to \
+            name the lifts — and they belong in the "exercises" list: a call \
+            without exercises is invalid. The athlete reviews \
             and confirms every proposal, so explain your reasoning in \
             "rationale".
             """,
@@ -126,9 +129,11 @@ public enum CoachToolSchemas {
                 "exercises": [
                     "type": "array",
                     "description": """
-                    The exercises for the day, in the order they should be \
-                    performed. One exercise per muscle group the day is meant \
-                    to cover.
+                    REQUIRED, never omitted — the exercises you are programming \
+                    for the day, in the order they should be performed. One \
+                    exercise per muscle group the day is meant to cover. Every \
+                    item needs "name" and "muscle_group"; "sets" and "reps" \
+                    only together.
                     """,
                     "minItems": 1,
                     "maxItems": StrengthDayProposal.maxExercises,

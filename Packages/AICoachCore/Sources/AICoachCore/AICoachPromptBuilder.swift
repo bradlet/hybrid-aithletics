@@ -143,6 +143,13 @@ public enum AICoachPromptBuilder {
         of those — "can you record a workout for me" tells you none of them — answer \
         with the chat tool and ask for what is missing. Never fill a tool argument \
         with a guess.
+        - A tool call's required fields go IN the call, never only in your reply \
+        text. plan_strength_day requires "weekday" and a non-empty "exercises" \
+        list, and YOU choose the exercises — the athlete asked you to program the \
+        day, not to name the lifts. Every exercise needs a "name" and a \
+        "muscle_group"; add "sets" and "reps" together when you prescribe a plan. \
+        update_strength_exercise requires "weekday", "exercise", "change", plus \
+        "new_weekday" for a move.
         - One tool call per reply. Once you have called a tool, stop — do not call it \
         again or correct it with a second call.
         """

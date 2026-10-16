@@ -106,6 +106,8 @@ final class StubAICoachService: AICoachService, @unchecked Sendable {
         static let scheduleChange = "change my plan"
         /// Produces a `plan_strength_day` proposal.
         static let strengthDay = "strength day"
+        /// Produces an `update_strength_exercise` proposal.
+        static let strengthUpdate = "update strength"
         /// Produces a rejected tool call.
         static let reject = "garble"
     }
@@ -178,6 +180,21 @@ final class StubAICoachService: AICoachService, @unchecked Sendable {
                         ),
                     ],
                     rationale: "A balanced full body session: legs, chest and back."
+                )))
+            ]
+        }
+        if lowercased.contains(ChatTrigger.strengthUpdate) {
+            // Moves the fixture's "Test Lift 1" out of today's lane so a UI
+            // test can watch it land in another day.
+            let todayIndex = Date().weekdayIndex
+            let destination = (todayIndex + 2) % 7
+            return textChunks("Here is the move I would make.") + [
+                .action(.updateStrengthExercise(StrengthExerciseUpdateProposal(
+                    weekdayIndex: todayIndex,
+                    exerciseName: "Test Lift 1",
+                    kind: .moveToDay,
+                    newWeekdayIndex: destination,
+                    rationale: "Spreading your lifts out across the week."
                 )))
             ]
         }

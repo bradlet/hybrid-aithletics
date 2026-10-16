@@ -32,6 +32,11 @@ enum CoachProposalApplier {
         case alreadyRecorded(Date)
         /// A session already exists on the day an `.add` proposal targets.
         case dateAlreadyScheduled(Date)
+        /// No board exercise with the proposed name lives in the lane section
+        /// the change reads from.
+        case strengthExerciseNotFound(name: String, weekdayName: String)
+        /// A move would duplicate a name the destination lane already has.
+        case strengthExerciseAlreadyInLane(name: String, weekdayName: String)
 
         var errorDescription: String? {
             switch self {
@@ -43,6 +48,10 @@ enum CoachProposalApplier {
                 return "That session is already recorded, so its plan can't be changed."
             case .dateAlreadyScheduled:
                 return "Something is already scheduled that day."
+            case .strengthExerciseNotFound(let name, let weekdayName):
+                return "I couldn't find \"\(name)\" in \(weekdayName)'s plan — change it directly on the Strength tab."
+            case .strengthExerciseAlreadyInLane(let name, let weekdayName):
+                return "\(weekdayName) already has \"\(name)\"."
             }
         }
     }
@@ -222,6 +231,117 @@ enum CoachProposalApplier {
     /// trimmed and case-folded, so "bench press" and "Bench Press " collide.
     private static func normalized(_ name: String) -> String {
         name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    // MARK: - Strength exercise updates
+
+    /// Applies an accepted strength-exercise update: remove, move to another
+    /// day, offload, or onboard — one exercise, one change.
+    ///
+    /// The exercise is resolved by name within the proposal's weekday lane,
+    /// case-insensitively, in board order — the same convention the prompt's
+    /// strength section uses, so the coach refers to what it saw. A name that
+    /// resolves to nothing fails loudly rather than inventing an exercise:
+    /// the coach naming a lift that isn't on the board is a model mistake.
+    ///
+    /// Moves ride `StrengthBoardPlanner.move`, so the destination lane is
+    /// renumbered dense, and a move across days keeps the exercise's section
+    /// (active stays active, offloaded stays offloaded).
+    ///
+    /// - Parameters:
+    ///   - proposal: The accepted proposal.
+    ///   - context: The context to mutate.
+    /// - Throws: `Failure` when the name resolves to nothing, or a move would
+    ///   duplicate a name the destination lane already has.
+    static func apply(
+        _ proposal: StrengthExerciseUpdateProposal,
+        in context: ModelContext
+    ) throws {
+        let all = (try? context.fetch(FetchDescriptor<StrengthExercise>())) ?? []
+        let key = normalized(proposal.exerciseName)
+
+        switch proposal.kind {
+        case .remove:
+            // Removal reads the whole lane — an offloaded exercise is still
+            // the athlete's to delete — preferring the active entry on a tie.
+            let exercise = try resolve(
+                key, day: proposal.weekdayIndex, offloaded: nil,
+                proposal: proposal, in: all
+            )
+            context.delete(exercise)
+
+        case .offload:
+            let exercise = try resolve(
+                key, day: proposal.weekdayIndex, offloaded: false,
+                proposal: proposal, in: all
+            )
+            StrengthBoardPlanner.move(
+                exercise, toDay: proposal.weekdayIndex, offloaded: true,
+                before: nil, in: all
+            )
+
+        case .onboard:
+            let exercise = try resolve(
+                key, day: proposal.weekdayIndex, offloaded: true,
+                proposal: proposal, in: all
+            )
+            StrengthBoardPlanner.move(
+                exercise, toDay: proposal.weekdayIndex, offloaded: false,
+                before: nil, in: all
+            )
+
+        case .moveToDay:
+            // The decoder requires a differing destination; the force unwrap
+            // only fires on a hand-constructed proposal.
+            guard let destination = proposal.newWeekdayIndex,
+                  destination != proposal.weekdayIndex else { return }
+            let exercise = try resolve(
+                key, day: proposal.weekdayIndex, offloaded: nil,
+                proposal: proposal, in: all
+            )
+            let destinationNames = Set(
+                StrengthBoardPlanner.lane(
+                    all, day: destination, offloaded: exercise.isOffloaded
+                )
+                .map { normalized($0.name) }
+            )
+            guard !destinationNames.contains(key) else {
+                throw Failure.strengthExerciseAlreadyInLane(
+                    name: exercise.name,
+                    weekdayName: proposal.newWeekdayName ?? "Day \(destination)"
+                )
+            }
+            StrengthBoardPlanner.move(
+                exercise, toDay: destination, offloaded: exercise.isOffloaded,
+                before: nil, in: all
+            )
+        }
+    }
+
+    /// Finds the board exercise named `key` in a lane. `offloaded: nil`
+    /// searches both sections, active first; a value searches just that
+    /// section. Throws the proposal's not-found failure otherwise.
+    private static func resolve(
+        _ key: String,
+        day: Int,
+        offloaded: Bool?,
+        proposal: StrengthExerciseUpdateProposal,
+        in all: [StrengthExercise]
+    ) throws -> StrengthExercise {
+        let sections: [Bool] = switch offloaded {
+        case .none: [false, true]
+        case .some(let section): [section]
+        }
+        for section in sections {
+            if let match = StrengthBoardPlanner.lane(all, day: day, offloaded: section)
+                .first(where: { normalized($0.name) == key }) {
+                return match
+            }
+        }
+        throw Failure.strengthExerciseNotFound(
+            name: proposal.exerciseName,
+            weekdayName: proposal.weekdayName
+        )
     }
 
     // MARK: - Workout proposals

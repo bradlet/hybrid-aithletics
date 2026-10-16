@@ -74,6 +74,8 @@ public enum CoachToolDecoder {
             return .recordWorkout(try workout(from: arguments))
         case .planStrengthDay:
             return .planStrengthDay(try strengthDay(from: arguments))
+        case .updateStrengthExercise:
+            return .updateStrengthExercise(try strengthExerciseUpdate(from: arguments))
         }
     }
 
@@ -146,15 +148,7 @@ public enum CoachToolDecoder {
     private static func strengthDay(
         from arguments: [String: Any]
     ) throws -> StrengthDayProposal {
-        let rawWeekday = try requiredString("weekday", in: arguments)
-        guard let weekdayIndex = StrengthDayProposal.weekdayNames.firstIndex(where: {
-            $0.caseInsensitiveCompare(rawWeekday) == .orderedSame
-        }) else {
-            throw CoachToolDecodeError.invalidArgument(
-                name: "weekday",
-                reason: "\"\(rawWeekday)\" is not a day of the week"
-            )
-        }
+        let weekdayIndex = try requiredWeekday("weekday", in: arguments)
         guard let rawExercises = arguments["exercises"] as? [[String: Any]] else {
             throw CoachToolDecodeError.missingArgument("exercises")
         }
@@ -175,6 +169,42 @@ public enum CoachToolDecoder {
             exercises: try rawExercises.map(plannedStrengthExercise(from:)),
             rationale: try requiredString("rationale", in: arguments)
         )
+    }
+
+    /// Decodes a strength-exercise update: one board exercise plus the change
+    /// to make to it.
+    private static func strengthExerciseUpdate(
+        from arguments: [String: Any]
+    ) throws -> StrengthExerciseUpdateProposal {
+        let rawKind = try requiredString("change", in: arguments)
+        guard let kind = StrengthExerciseChangeKind(rawValue: rawKind) else {
+            throw CoachToolDecodeError.invalidArgument(
+                name: "change",
+                reason: "\"\(rawKind)\" is not a known change"
+            )
+        }
+        let proposal = StrengthExerciseUpdateProposal(
+            weekdayIndex: try requiredWeekday("weekday", in: arguments),
+            exerciseName: try requiredString("exercise", in: arguments),
+            kind: kind,
+            newWeekdayIndex: try optionalWeekday("new_weekday", in: arguments),
+            rationale: try requiredString("rationale", in: arguments)
+        )
+        // A move has to actually say where to. Without this a "move bench
+        // press to Saturday" call with no new_weekday is a no-op the athlete
+        // would be asked to approve — same rule as the schedule-change values.
+        if kind == .moveToDay {
+            guard let destination = proposal.newWeekdayIndex else {
+                throw CoachToolDecodeError.missingArgument("new_weekday")
+            }
+            guard destination != proposal.weekdayIndex else {
+                throw CoachToolDecodeError.invalidArgument(
+                    name: "new_weekday",
+                    reason: "the exercise is already in that day's lane"
+                )
+            }
+        }
+        return proposal
     }
 
     /// Decodes one entry of a strength-day proposal.
@@ -241,6 +271,34 @@ public enum CoachToolDecoder {
             )
         }
         return date
+    }
+
+    private static func requiredWeekday(
+        _ key: String,
+        in arguments: [String: Any]
+    ) throws -> Int {
+        guard let index = try optionalWeekday(key, in: arguments) else {
+            throw CoachToolDecodeError.missingArgument(key)
+        }
+        return index
+    }
+
+    /// Reads a weekday name into its lane index, case-insensitively — the
+    /// board is a weekly template, so "friday" and "Friday" both mean lane 5.
+    private static func optionalWeekday(
+        _ key: String,
+        in arguments: [String: Any]
+    ) throws -> Int? {
+        guard let raw = optionalString(key, in: arguments) else { return nil }
+        guard let index = StrengthDayProposal.weekdayNames.firstIndex(where: {
+            $0.caseInsensitiveCompare(raw) == .orderedSame
+        }) else {
+            throw CoachToolDecodeError.invalidArgument(
+                name: key,
+                reason: "\"\(raw)\" is not a day of the week"
+            )
+        }
+        return index
     }
 
     /// Reads a number that may arrive as `Double`, `Int`, or a numeric string.

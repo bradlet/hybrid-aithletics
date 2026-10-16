@@ -182,11 +182,19 @@ The strength board is part of the coaching snapshot:
   `AICoachPromptBuilder`'s "Strength board" prompt section (active lanes only,
   one line per exercise with its sets × reps plan).
 
-The coach can also *plan* strength: its `plan_strength_day` tool proposes a
-batch of exercises for one weekday lane (weekday name, not a date — the board
-is a weekly template). Accepting inserts at the lane end via
-`CoachProposalApplier`, matching names against the merged library for
-provenance and skipping names the active lane already has.
+The coach can also *plan* strength. Two tools, both weekday-named rather
+than dated (the board is a weekly template) and both proposals the athlete
+accepts before anything changes:
+
+- `plan_strength_day` — a batch of exercises added to one weekday lane.
+  Accepting inserts at the lane end via `CoachProposalApplier`, matching
+  names against the merged library for provenance and skipping names the
+  active lane already has. A one-item batch is how the coach adds an
+  individual exercise; adding appends, never replaces.
+- `update_strength_exercise` — one change to one exercise already on the
+  board: remove, move to another day (section preserved), offload, or
+  onboard. The exercise is addressed by weekday + name, resolved
+  case-insensitively; no match or a move-collision fails loudly.
 
 ## Feature Plan / Extensibility Notes
 
@@ -203,9 +211,10 @@ Planned extension points, in the order they were designed in:
    (`averageWeight`), and first/last-set trends for fatigue analysis. A future
    History integration can group `exercise.workouts` by `recordingType` and feed
    Swift Charts — no schema change needed.
-3. **Richer coach integration.** The board is in the snapshot and
-   `plan_strength_day` plans a day; a natural next step is recording lifts by
-   chat, or coach moves/removals of board exercises (today's tool only adds).
+3. **Richer coach integration.** The board is in the snapshot, and the coach
+   can plan a day (`plan_strength_day`) and change individual board exercises
+   (`update_strength_exercise`). A natural next step is recording lifts by
+   chat — the one write path the coach still can't touch.
 4. **Library growth.** The bundled catalog
    (`Resources/StrengthExerciseLibrary.json`, 100 exercises) is a plain JSON array —
    adding entries is a data change, not a code change. `LibraryExercise` keeps

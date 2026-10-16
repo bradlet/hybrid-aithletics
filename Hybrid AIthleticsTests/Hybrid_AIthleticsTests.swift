@@ -6028,6 +6028,154 @@ struct CoachProposalApplierTests {
         #expect(friday.count == 2)
         #expect(friday.contains { !$0.isOffloaded && $0.name == "Bench Press" })
     }
+
+    // MARK: strength exercise updates
+
+    private func updateProposal(
+        weekdayIndex: Int = 5,
+        name: String = "Bench Press",
+        kind: StrengthExerciseChangeKind = .remove,
+        newWeekdayIndex: Int? = nil
+    ) -> StrengthExerciseUpdateProposal {
+        StrengthExerciseUpdateProposal(
+            weekdayIndex: weekdayIndex,
+            exerciseName: name,
+            kind: kind,
+            newWeekdayIndex: newWeekdayIndex,
+            rationale: "test rationale"
+        )
+    }
+
+    @Test func updateRemovesFromTheActiveLane() throws {
+        let context = try makeContext()
+        context.insert(StrengthExercise(name: "Bench Press", weekdayIndex: 5, sortOrder: 0))
+        context.insert(StrengthExercise(name: "Row", weekdayIndex: 5, sortOrder: 1))
+
+        try CoachProposalApplier.apply(updateProposal(), in: context)
+
+        let friday = try fetchStrength(in: context)
+        #expect(friday.map(\.name) == ["Row"])
+        #expect(friday.first?.sortOrder == 1, "survivors keep their order, like the board's swipe-delete")
+    }
+
+    @Test func updateRemoveFallsBackToTheOffloadedSection() throws {
+        let context = try makeContext()
+        context.insert(StrengthExercise(
+            name: "Bench Press", weekdayIndex: 5, isOffloaded: true, sortOrder: 0
+        ))
+
+        try CoachProposalApplier.apply(updateProposal(), in: context)
+
+        #expect(try fetchStrength(in: context).isEmpty)
+    }
+
+    @Test func updateRemovePrefersTheActiveEntryOnANameTie() throws {
+        let context = try makeContext()
+        let active = StrengthExercise(name: "Bench Press", weekdayIndex: 5, sortOrder: 0)
+        let shelved = StrengthExercise(
+            name: "bench press", weekdayIndex: 5, isOffloaded: true, sortOrder: 0
+        )
+        context.insert(active)
+        context.insert(shelved)
+
+        try CoachProposalApplier.apply(updateProposal(name: "BENCH PRESS"), in: context)
+
+        let remaining = try fetchStrength(in: context)
+        #expect(remaining.count == 1)
+        #expect(remaining.first?.isOffloaded == true, "the offloaded entry survives")
+    }
+
+    @Test func updateOffloadAppendsToTheOffloadedSection() throws {
+        let context = try makeContext()
+        context.insert(StrengthExercise(name: "Bench Press", weekdayIndex: 5, sortOrder: 1))
+        context.insert(StrengthExercise(
+            name: "Old Squat", weekdayIndex: 5, isOffloaded: true, sortOrder: 0
+        ))
+
+        try CoachProposalApplier.apply(updateProposal(kind: .offload), in: context)
+
+        let offloaded = StrengthBoardPlanner.lane(
+            try fetchStrength(in: context), day: 5, offloaded: true
+        )
+        #expect(offloaded.map(\.name) == ["Old Squat", "Bench Press"])
+        #expect(offloaded.map(\.sortOrder) == [0, 1], "destination lane renumbered dense")
+    }
+
+    @Test func updateOnboardAppendsToTheActiveLane() throws {
+        let context = try makeContext()
+        context.insert(StrengthExercise(name: "Row", weekdayIndex: 5, sortOrder: 0))
+        context.insert(StrengthExercise(
+            name: "Bench Press", weekdayIndex: 5, isOffloaded: true, sortOrder: 0
+        ))
+
+        try CoachProposalApplier.apply(updateProposal(kind: .onboard), in: context)
+
+        let active = StrengthBoardPlanner.lane(
+            try fetchStrength(in: context), day: 5, offloaded: false
+        )
+        #expect(active.map(\.name) == ["Row", "Bench Press"])
+        #expect(active.map(\.sortOrder) == [0, 1])
+    }
+
+    @Test func updateMoveToDayAppendsAndKeepsTheSection() throws {
+        let context = try makeContext()
+        context.insert(StrengthExercise(
+            name: "Bench Press", weekdayIndex: 5, isOffloaded: true, sortOrder: 0
+        ))
+        context.insert(StrengthExercise(name: "Saturday Curl", weekdayIndex: 6, sortOrder: 0))
+
+        try CoachProposalApplier.apply(
+            updateProposal(kind: .moveToDay, newWeekdayIndex: 6), in: context
+        )
+
+        let saturdayOffloaded = StrengthBoardPlanner.lane(
+            try fetchStrength(in: context), day: 6, offloaded: true
+        )
+        #expect(saturdayOffloaded.map(\.name) == ["Bench Press"],
+                "offloaded stays offloaded across the move")
+        #expect(saturdayOffloaded.first?.sortOrder == 0)
+    }
+
+    @Test func updateMoveToDayRejectsANameTheDestinationAlreadyHas() throws {
+        let context = try makeContext()
+        context.insert(StrengthExercise(name: "Bench Press", weekdayIndex: 5, sortOrder: 0))
+        context.insert(StrengthExercise(name: "bench press", weekdayIndex: 6, sortOrder: 0))
+
+        #expect(throws: CoachProposalApplier.Failure.strengthExerciseAlreadyInLane(
+            name: "Bench Press", weekdayName: "Saturday"
+        )) {
+            try CoachProposalApplier.apply(
+                updateProposal(kind: .moveToDay, newWeekdayIndex: 6), in: context
+            )
+        }
+        #expect(try fetchStrength(in: context).count == 2, "nothing moved")
+    }
+
+    @Test func updateFailsLoudlyWhenTheNameIsNotOnTheBoard() throws {
+        let context = try makeContext()
+        context.insert(StrengthExercise(name: "Row", weekdayIndex: 5, sortOrder: 0))
+
+        #expect(throws: CoachProposalApplier.Failure.strengthExerciseNotFound(
+            name: "Bench Press", weekdayName: "Friday"
+        )) {
+            try CoachProposalApplier.apply(updateProposal(), in: context)
+        }
+    }
+
+    @Test func updateOffloadFailsWhenTheExerciseIsAlreadyOffloaded() throws {
+        let context = try makeContext()
+        context.insert(StrengthExercise(
+            name: "Bench Press", weekdayIndex: 5, isOffloaded: true, sortOrder: 0
+        ))
+
+        // Offloading reads the active lane; an already-offloaded exercise
+        // isn't there to offload again.
+        #expect(throws: CoachProposalApplier.Failure.strengthExerciseNotFound(
+            name: "Bench Press", weekdayName: "Friday"
+        )) {
+            try CoachProposalApplier.apply(updateProposal(kind: .offload), in: context)
+        }
+    }
 }
 
 // MARK: - Coach Chat Store Tests

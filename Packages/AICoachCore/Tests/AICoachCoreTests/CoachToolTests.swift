@@ -25,6 +25,9 @@ struct CoachToolSchemaTests {
     private var planStrengthDay: [String: any Sendable] {
         CoachToolSchemas.planStrengthDay
     }
+    private var updateStrengthExercise: [String: any Sendable] {
+        CoachToolSchemas.updateStrengthExercise
+    }
     private var recordWorkout: [String: any Sendable] {
         CoachToolSchemas.recordWorkout(today: today)
     }
@@ -152,6 +155,46 @@ struct CoachToolSchemaTests {
         let description = fn(planStrengthDay)["description"] as! String
         #expect(description.contains("ONE call"))
         #expect(description.lowercased().contains("muscle group"))
+    }
+
+    @Test func strengthDayDescriptionCoversSingleExerciseAdds() {
+        // Adding one exercise to a day rides the same tool; the description
+        // must say so, and must say it appends rather than replaces.
+        let description = fn(planStrengthDay)["description"] as! String
+        #expect(description.contains("one or two exercises"))
+        #expect(description.contains("never replaces"))
+    }
+
+    @Test func strengthUpdateRequiresWeekdayExerciseChangeAndRationale() {
+        #expect(
+            Set(required(updateStrengthExercise))
+                == Set(["weekday", "exercise", "change", "rationale"])
+        )
+    }
+
+    @Test func strengthUpdateChangeEnumeratesEveryKind() {
+        let change = properties(updateStrengthExercise)["change"] as! [String: any Sendable]
+        #expect(change["enum"] as! [String] == StrengthExerciseChangeKind.allCases.map(\.rawValue))
+    }
+
+    @Test func strengthUpdateWeekdaysEnumerateEveryDayName() {
+        let props = properties(updateStrengthExercise)
+        for key in ["weekday", "new_weekday"] {
+            let weekday = props[key] as! [String: any Sendable]
+            #expect(
+                weekday["enum"] as! [String] == StrengthDayProposal.weekdayNames,
+                "\(key) should offer every day name"
+            )
+        }
+    }
+
+    @Test func strengthUpdateDescriptionPointsAddsAtPlanStrengthDay() {
+        // The two strength tools overlap in intent; the update tool has to
+        // tell the model which one adds exercises, or it will try to "change"
+        // an exercise that isn't on the board yet.
+        let description = fn(updateStrengthExercise)["description"] as! String
+        #expect(description.contains("ONE exercise"))
+        #expect(description.contains("plan_strength_day"))
     }
 
     /// Reads the `items` sub-schema out of the tool's `exercises` property.
@@ -643,6 +686,132 @@ struct CoachToolDecoderTests {
             try CoachToolDecoder.decode(name: "plan_strength_day", arguments: arguments)
         }
     }
+
+    // MARK: update_strength_exercise
+
+    /// A valid remove-argument object, mutable per test.
+    private func strengthUpdateArguments() -> [String: Any] {
+        [
+            "weekday": "Friday",
+            "exercise": "Barbell Bench Press",
+            "change": "remove",
+            "rationale": "You said your shoulder is nagging.",
+        ]
+    }
+
+    @Test func decodesStrengthExerciseRemove() throws {
+        let action = try CoachToolDecoder.decode(
+            name: "update_strength_exercise",
+            arguments: strengthUpdateArguments()
+        )
+        #expect(action == .updateStrengthExercise(StrengthExerciseUpdateProposal(
+            weekdayIndex: 5,
+            exerciseName: "Barbell Bench Press",
+            kind: .remove,
+            rationale: "You said your shoulder is nagging."
+        )))
+        #expect(action.tool == .updateStrengthExercise)
+    }
+
+    @Test func decodesStrengthExerciseMoveToDay() throws {
+        var arguments = strengthUpdateArguments()
+        arguments["change"] = "move_to_day"
+        arguments["new_weekday"] = "saturday"
+        let action = try CoachToolDecoder.decode(
+            name: "update_strength_exercise", arguments: arguments
+        )
+        #expect(action == .updateStrengthExercise(StrengthExerciseUpdateProposal(
+            weekdayIndex: 5,
+            exerciseName: "Barbell Bench Press",
+            kind: .moveToDay,
+            newWeekdayIndex: 6,
+            rationale: "You said your shoulder is nagging."
+        )))
+    }
+
+    @Test func decodesStrengthExerciseOffloadAndOnboard() throws {
+        for (raw, kind) in [("offload", StrengthExerciseChangeKind.offload),
+                            ("onboard", .onboard)] {
+            var arguments = strengthUpdateArguments()
+            arguments["change"] = raw
+            let action = try CoachToolDecoder.decode(
+                name: "update_strength_exercise", arguments: arguments
+            )
+            guard case .updateStrengthExercise(let proposal) = action else {
+                Issue.record("expected an update proposal for \(raw)")
+                continue
+            }
+            #expect(proposal.kind == kind)
+            #expect(proposal.newWeekdayIndex == nil)
+        }
+    }
+
+    @Test func strengthUpdateMoveRequiresADestination() {
+        var arguments = strengthUpdateArguments()
+        arguments["change"] = "move_to_day"
+        #expect(throws: CoachToolDecodeError.missingArgument("new_weekday")) {
+            try CoachToolDecoder.decode(name: "update_strength_exercise", arguments: arguments)
+        }
+    }
+
+    @Test func strengthUpdateMoveRejectsTheSameDay() {
+        // Moving Friday's bench press to Friday is a no-op the athlete would
+        // be asked to approve — the model meant something else.
+        var arguments = strengthUpdateArguments()
+        arguments["change"] = "move_to_day"
+        arguments["new_weekday"] = "friday"
+        #expect(throws: CoachToolDecodeError.self) {
+            try CoachToolDecoder.decode(name: "update_strength_exercise", arguments: arguments)
+        }
+    }
+
+    @Test func strengthUpdateToleratesAnExtraDestinationOnOtherKinds() {
+        // Like a schedule change carrying an irrelevant distance: the value a
+        // non-move kind doesn't need is ignored, not rejected.
+        var arguments = strengthUpdateArguments()
+        arguments["change"] = "offload"
+        arguments["new_weekday"] = "Monday"
+        #expect(throws: Never.self) {
+            try CoachToolDecoder.decode(name: "update_strength_exercise", arguments: arguments)
+        }
+    }
+
+    @Test func strengthUpdateRejectsUnknownChange() {
+        var arguments = strengthUpdateArguments()
+        arguments["change"] = "rename"
+        #expect(throws: CoachToolDecodeError.self) {
+            try CoachToolDecoder.decode(name: "update_strength_exercise", arguments: arguments)
+        }
+    }
+
+    @Test func strengthUpdateRejectsUnknownWeekdays() {
+        for key in ["weekday", "new_weekday"] {
+            var arguments = strengthUpdateArguments()
+            arguments["change"] = "move_to_day"
+            arguments[key] = "Freeday"
+            #expect(throws: CoachToolDecodeError.self) {
+                try CoachToolDecoder.decode(name: "update_strength_exercise", arguments: arguments)
+            }
+        }
+    }
+
+    @Test func strengthUpdateRequiresEveryBaseField() {
+        for key in ["weekday", "exercise", "change", "rationale"] {
+            var arguments = strengthUpdateArguments()
+            arguments.removeValue(forKey: key)
+            #expect(throws: CoachToolDecodeError.missingArgument(key)) {
+                try CoachToolDecoder.decode(name: "update_strength_exercise", arguments: arguments)
+            }
+        }
+    }
+
+    @Test func strengthUpdateRejectsBlankExerciseNames() {
+        var arguments = strengthUpdateArguments()
+        arguments["exercise"] = "   "
+        #expect(throws: CoachToolDecodeError.missingArgument("exercise")) {
+            try CoachToolDecoder.decode(name: "update_strength_exercise", arguments: arguments)
+        }
+    }
 }
 
 // MARK: - Workout Proposal Codable Tests
@@ -702,6 +871,32 @@ struct CoachProposalCodableTests {
         #expect(StrengthDayProposal(weekdayIndex: 9, exercises: [], rationale: "").weekdayName == "Day 9")
     }
 
+    @Test func strengthUpdateProposalRoundTrips() throws {
+        let original = StrengthExerciseUpdateProposal(
+            weekdayIndex: 5,
+            exerciseName: "Barbell Bench Press",
+            kind: .moveToDay,
+            newWeekdayIndex: 6,
+            rationale: "Shifting push day."
+        )
+        let data = try JSONEncoder().encode(original)
+        #expect(try JSONDecoder().decode(StrengthExerciseUpdateProposal.self, from: data) == original)
+    }
+
+    @Test func strengthUpdateWeekdayNamesResolveTheLanes() {
+        let proposal = StrengthExerciseUpdateProposal(
+            weekdayIndex: 5, exerciseName: "x", kind: .moveToDay,
+            newWeekdayIndex: 0, rationale: ""
+        )
+        #expect(proposal.weekdayName == "Friday")
+        #expect(proposal.newWeekdayName == "Sunday")
+        let outOfRange = StrengthExerciseUpdateProposal(
+            weekdayIndex: 9, exerciseName: "x", kind: .remove, rationale: ""
+        )
+        #expect(outOfRange.weekdayName == "Day 9")
+        #expect(outOfRange.newWeekdayName == nil)
+    }
+
     @Test func actionReportsItsTool() {
         #expect(CoachAction.reply("hi").tool == .chat)
         #expect(CoachAction.recordWorkout(WorkoutProposal(
@@ -713,6 +908,9 @@ struct CoachProposalCodableTests {
         #expect(CoachAction.planStrengthDay(StrengthDayProposal(
             weekdayIndex: 5, exercises: [], rationale: "x"
         )).tool == .planStrengthDay)
+        #expect(CoachAction.updateStrengthExercise(StrengthExerciseUpdateProposal(
+            weekdayIndex: 5, exerciseName: "x", kind: .remove, rationale: "x"
+        )).tool == .updateStrengthExercise)
     }
 }
 
@@ -818,8 +1016,15 @@ struct CoachChatPromptTests {
         // The strength board is a weekly template; the model must not try to
         // date a strength day the way it dates an aerobic session.
         #expect(preamble.contains("plan_strength_day"))
-        #expect(preamble.contains("weekday name, never a date"))
+        #expect(preamble.contains("weekday names, never"))
         #expect(preamble.contains("the whole day"))
+    }
+
+    @Test func chatPreambleAssignsEachStrengthToolItsJob() {
+        // plan_strength_day adds (and appends, never replaces);
+        // update_strength_exercise changes what is already on the board.
+        #expect(preamble.contains("update_strength_exercise"))
+        #expect(preamble.contains("appends, never replaces"))
     }
 
     @Test func systemTurnCarriesTheAnchorEvenWithoutContext() {

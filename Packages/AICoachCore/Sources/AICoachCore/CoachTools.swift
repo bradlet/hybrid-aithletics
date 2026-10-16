@@ -24,6 +24,8 @@ public enum CoachTool: String, Codable, CaseIterable, Sendable {
     case recordWorkout = "record_workout"
     /// Propose a batch of strength exercises for one weekday's lane.
     case planStrengthDay = "plan_strength_day"
+    /// Propose a change to one strength exercise already on the board.
+    case updateStrengthExercise = "update_strength_exercise"
 }
 
 /// A decoded, validated tool call — what the app acts on.
@@ -36,6 +38,8 @@ public enum CoachAction: Equatable, Sendable {
     case recordWorkout(WorkoutProposal)
     /// A proposed strength day, pending the athlete's acceptance.
     case planStrengthDay(StrengthDayProposal)
+    /// A proposed edit to one board exercise, pending the athlete's acceptance.
+    case updateStrengthExercise(StrengthExerciseUpdateProposal)
 
     /// Which tool produced this action.
     public var tool: CoachTool {
@@ -44,6 +48,7 @@ public enum CoachAction: Equatable, Sendable {
         case .suggestScheduleChange: .suggestScheduleChange
         case .recordWorkout: .recordWorkout
         case .planStrengthDay: .planStrengthDay
+        case .updateStrengthExercise: .updateStrengthExercise
         }
     }
 }
@@ -158,6 +163,71 @@ public struct StrengthDayProposal: Codable, Equatable, Sendable {
             return "Day \(weekdayIndex)"
         }
         return Self.weekdayNames[weekdayIndex]
+    }
+}
+
+/// What kind of edit a strength-exercise update describes. Raw values are the
+/// schema's `change` enum.
+public enum StrengthExerciseChangeKind: String, Codable, CaseIterable, Sendable {
+    /// Drop the exercise from the board entirely, including its lift history.
+    case remove
+    /// Move the exercise to another day's lane, keeping its section
+    /// (active stays active, offloaded stays offloaded).
+    case moveToDay = "move_to_day"
+    /// Move the exercise out of the active plan into its day's offloaded
+    /// section.
+    case offload
+    /// Bring an offloaded exercise back into its day's active plan.
+    case onboard
+}
+
+/// A proposed change to one exercise already on the athlete's strength board.
+///
+/// The exercise is addressed by weekday lane plus name — the same
+/// case-insensitive name convention the rest of the strength flow uses —
+/// rather than by an identifier the model would have to copy from the prompt.
+public struct StrengthExerciseUpdateProposal: Codable, Equatable, Sendable {
+    /// The day-of-week lane the exercise currently lives in
+    /// (Sunday=0 ... Saturday=6).
+    public let weekdayIndex: Int
+    /// The exercise's name as it appears on the board.
+    public let exerciseName: String
+    /// What kind of change this is.
+    public let kind: StrengthExerciseChangeKind
+    /// The destination lane for `.moveToDay`, otherwise `nil`.
+    public let newWeekdayIndex: Int?
+    /// The coach's reason, shown to the athlete beside Accept / Dismiss.
+    public let rationale: String
+
+    public init(
+        weekdayIndex: Int,
+        exerciseName: String,
+        kind: StrengthExerciseChangeKind,
+        newWeekdayIndex: Int? = nil,
+        rationale: String
+    ) {
+        self.weekdayIndex = weekdayIndex
+        self.exerciseName = exerciseName
+        self.kind = kind
+        self.newWeekdayIndex = newWeekdayIndex
+        self.rationale = rationale
+    }
+
+    /// The current lane's day name, tolerating an out-of-range index.
+    public var weekdayName: String {
+        Self.weekdayName(weekdayIndex)
+    }
+
+    /// The destination lane's day name for a `.moveToDay`, tolerating an
+    /// out-of-range index.
+    public var newWeekdayName: String? {
+        newWeekdayIndex.map(Self.weekdayName(_:))
+    }
+
+    private static func weekdayName(_ index: Int) -> String {
+        let names = StrengthDayProposal.weekdayNames
+        guard names.indices.contains(index) else { return "Day \(index)" }
+        return names[index]
     }
 }
 

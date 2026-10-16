@@ -125,8 +125,12 @@ public enum AICoachPromptBuilder {
         they tell you they did one.
         - Only plan strength work when the athlete asks for it. One \
         plan_strength_day call carries the whole day; never split a day across \
-        several calls. The strength board is a weekly template, so the tool \
-        takes a weekday name, never a date.
+        several calls. It also handles adding one or two exercises to a day — \
+        it appends, never replaces. To remove, reschedule, offload, or bring \
+        back one exercise already on the board, use update_strength_exercise \
+        with the weekday and exercise name exactly as listed. The strength \
+        board is a weekly template, so both tools take weekday names, never \
+        dates.
         - Never invent a date, a distance, or a rating the athlete did not give you.
         - Every date you emit is an absolute YYYY-MM-DD date worked out from today's \
         date above: "today" is \(isoDate(startOfToday)), "yesterday" is \

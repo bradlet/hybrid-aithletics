@@ -69,7 +69,8 @@ struct HomeView: View {
                             onAcceptScheduleChange: applyScheduleChange,
                             onAcceptStrengthDay: { proposal, messageID in
                                 Task { await applyStrengthDay(proposal, messageID: messageID) }
-                            }
+                            },
+                            onAcceptStrengthExerciseUpdate: applyStrengthExerciseUpdate
                         )
                     } label: {
                         CoachEntryCard(
@@ -234,6 +235,40 @@ struct HomeView: View {
             for: messageID,
             note: Self.strengthDayConfirmation(outcome, weekdayName: proposal.weekdayName)
         )
+    }
+
+    /// Applies an accepted strength-exercise update, reporting a failure to
+    /// the athlete rather than silently doing nothing.
+    private func applyStrengthExerciseUpdate(
+        _ proposal: StrengthExerciseUpdateProposal,
+        messageID: UUID
+    ) {
+        do {
+            try CoachProposalApplier.apply(proposal, in: modelContext)
+            coachChat.confirmProposal(
+                for: messageID,
+                note: Self.strengthUpdateConfirmation(proposal)
+            )
+        } catch {
+            applyErrorMessage = error.localizedDescription
+        }
+    }
+
+    /// The transcript confirmation for an applied strength-exercise update.
+    static func strengthUpdateConfirmation(
+        _ proposal: StrengthExerciseUpdateProposal
+    ) -> String {
+        let name = proposal.exerciseName
+        switch proposal.kind {
+        case .remove:
+            return "Done — removed \(name) from \(proposal.weekdayName)."
+        case .moveToDay:
+            return "Done — moved \(name) to \(proposal.newWeekdayName ?? "the new day")."
+        case .offload:
+            return "Done — offloaded \(name) out of \(proposal.weekdayName)'s plan."
+        case .onboard:
+            return "Done — moved \(name) back to \(proposal.weekdayName)'s active plan."
+        }
     }
 
     /// The transcript confirmation for an applied strength day.

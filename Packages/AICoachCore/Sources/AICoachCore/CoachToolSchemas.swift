@@ -29,6 +29,7 @@ public enum CoachToolSchemas {
             chat,
             suggestScheduleChange(today: today),
             planStrengthDay,
+            updateStrengthExercise,
             recordWorkout(today: today),
         ]
     }
@@ -104,14 +105,18 @@ public enum CoachToolSchemas {
         function(
             name: CoachTool.planStrengthDay.rawValue,
             description: """
-            Propose a strength training day: a batch of exercises to add to one \
-            weekday's lane on the athlete's weekly strength board. Use this when \
-            the athlete asks you to set up, plan, or change strength work for a \
-            day of the week. Put the WHOLE day in ONE call — when the athlete \
-            asks for a full body routine, span several muscle groups (quads or \
-            glutes, chest, back, shoulders, arms, core) with one exercise each. \
-            The athlete reviews and confirms every proposal, so explain your \
-            reasoning in "rationale".
+            Propose adding strength exercises to one weekday's lane on the \
+            athlete's weekly strength board. Use this when the athlete asks you \
+            to set up or plan strength work for a day of the week, OR to add \
+            one or two exercises to a day that already has some — a one-item \
+            list is fine. Adding appends to the day's existing exercises; it \
+            never replaces them. To remove, reschedule, or offload an existing \
+            exercise, use update_strength_exercise instead. When the athlete \
+            asks for a full body routine, put the WHOLE day in ONE call and \
+            span several muscle groups (quads or glutes, chest, back, \
+            shoulders, arms, core) with one exercise each. The athlete reviews \
+            and confirms every proposal, so explain your reasoning in \
+            "rationale".
             """,
             properties: [
                 "weekday": enumeration(
@@ -144,6 +149,52 @@ public enum CoachToolSchemas {
                 "rationale": string("One or two sentences on why this day helps."),
             ],
             required: ["weekday", "exercises", "rationale"]
+        )
+    }
+
+    // MARK: - update_strength_exercise
+
+    /// Propose a change to one exercise already on the strength board.
+    ///
+    /// Like the board itself, the tool is dated by weekday name, and the
+    /// exercise is addressed by name: the prompt shows the athlete's board as
+    /// `Friday: Barbell Bench Press (Chest)`, and the model refers back to
+    /// what it saw rather than copying an identifier.
+    public static var updateStrengthExercise: [String: any Sendable] {
+        function(
+            name: CoachTool.updateStrengthExercise.rawValue,
+            description: """
+            Propose changing ONE exercise already on the athlete's weekly \
+            strength board: remove it, move it to another day, offload it \
+            (set it aside, out of the week's plan), or onboard it (bring an \
+            offloaded exercise back into the plan). Use the weekday and \
+            exercise name exactly as they appear on the strength board. One \
+            exercise per call. To add NEW exercises to a day, use \
+            plan_strength_day instead. The athlete reviews and confirms every \
+            proposal, so explain your reasoning in "rationale".
+            """,
+            properties: [
+                "weekday": enumeration(
+                    StrengthDayProposal.weekdayNames,
+                    "The day whose lane the exercise is in now — a weekday name, never a date."
+                ),
+                "exercise": string("The exercise's name as it appears on the board, e.g. \"Barbell Bench Press\"."),
+                "change": enumeration(
+                    StrengthExerciseChangeKind.allCases.map(\.rawValue),
+                    """
+                    What to do: "remove" deletes it from the board, \
+                    "move_to_day" puts it in another day's lane (same section), \
+                    "offload" moves it to its day's offloaded section, \
+                    "onboard" brings it back into the active plan.
+                    """
+                ),
+                "new_weekday": enumeration(
+                    StrengthDayProposal.weekdayNames,
+                    "The day to move the exercise to. Required for move_to_day; must differ from weekday."
+                ),
+                "rationale": string("One or two sentences on why this change helps."),
+            ],
+            required: ["weekday", "exercise", "change", "rationale"]
         )
     }
 

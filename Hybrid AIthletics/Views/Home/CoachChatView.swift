@@ -25,6 +25,8 @@ struct CoachChatView: View {
     let onAcceptScheduleChange: (ScheduleChangeProposal, UUID) -> Void
     /// Called when the athlete accepts a strength-day proposal.
     let onAcceptStrengthDay: (StrengthDayProposal, UUID) -> Void
+    /// Called when the athlete accepts a strength-exercise update.
+    let onAcceptStrengthExerciseUpdate: (StrengthExerciseUpdateProposal, UUID) -> Void
 
     @State private var draft: String = ""
 
@@ -396,6 +398,8 @@ struct CoachChatView: View {
             onAcceptScheduleChange(proposal, messageID)
         case .planStrengthDay(let proposal):
             onAcceptStrengthDay(proposal, messageID)
+        case .updateStrengthExercise(let proposal):
+            onAcceptStrengthExerciseUpdate(proposal, messageID)
         case .reply:
             store.resolveProposal(for: messageID)
         }
@@ -499,6 +503,7 @@ struct ProposalCard: View {
         case .recordWorkout: "square.and.pencil"
         case .suggestScheduleChange: "calendar.badge.clock"
         case .planStrengthDay: "dumbbell"
+        case .updateStrengthExercise: "dumbbell"
         case .reply: "text.bubble"
         }
     }
@@ -508,6 +513,7 @@ struct ProposalCard: View {
         case .recordWorkout: "Record this workout?"
         case .suggestScheduleChange: "Change your plan?"
         case .planStrengthDay: "Plan this strength day?"
+        case .updateStrengthExercise: "Update your strength board?"
         case .reply: "Suggestion"
         }
     }
@@ -579,6 +585,27 @@ struct ProposalCard: View {
             }
             lines.append(proposal.rationale)
             return lines
+
+        case .updateStrengthExercise(let proposal):
+            return [Self.strengthUpdateSummary(proposal), proposal.rationale]
+        }
+    }
+
+    /// The one-line summary of a strength-exercise update, e.g.
+    /// `Move Barbell Bench Press: Friday → Saturday`.
+    private static func strengthUpdateSummary(
+        _ proposal: StrengthExerciseUpdateProposal
+    ) -> String {
+        let name = proposal.exerciseName
+        switch proposal.kind {
+        case .remove:
+            return "Remove \(name) from \(proposal.weekdayName)"
+        case .moveToDay:
+            return "Move \(name): \(proposal.weekdayName) → \(proposal.newWeekdayName ?? "?")"
+        case .offload:
+            return "Offload \(name) (\(proposal.weekdayName))"
+        case .onboard:
+            return "Move \(name) to \(proposal.weekdayName)'s active plan"
         }
     }
 

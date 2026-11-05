@@ -135,3 +135,15 @@ See [docs/AI_COACH.md](../AI_COACH.md) for the current architecture.
 - **Free-tier AI features.** Surface a lightweight coach summary ("this week in review") to free users, reinforcing the "Hybrid AIthletics" branding without gating the download.
 - ~~**Upgrade to Gemma 4.**~~ Shipped (2026-10-14) via mlx-swift-lm rather than LiteRT-LM. A future runtime swap (e.g. LiteRT-LM once its Swift SDK is stable) stays cheap behind the `AICoachService` protocol. See `docs/MODEL_UPGRADE.md`.
 - **Fine-tuning.** Explore LoRA adapters or small fine-tuning on a corpus of running-coach dialogue to improve domain fit without materially increasing model size.
+
+## Amendment — 2026-11-04
+
+**Changed:** the model-facing code moved out of the app target into a local package,
+`Packages/AICoachRuntime` (`CoachModelPreset`, `CoachRuntime`, and the Hugging Face loading code that
+was `Services/AICoach/MLXModelLoading.swift`). `MLXAICoachService` is now a thin adapter over it.
+
+**Why:** so the evals could run the code the app ships. `Evals/` now depends on the same package,
+generates with Gemma 4 E2B on the Mac's GPU (SwiftPM in the Swift 6.4 toolchain compiles MLX's Metal
+shaders, which earlier toolchains did not), and scores the tool-calling chat. The Python runner and
+the Gemma 3 pin are gone, so the consequence above, "eval scores don't reflect the production model",
+no longer holds.

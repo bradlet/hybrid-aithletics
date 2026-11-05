@@ -8,7 +8,7 @@ Hybrid AIthletics uses a flat-layered architecture with SwiftUI + SwiftData. The
 
 ```
 Packages/AICoachCore/      Shared library: prompt builder, coaching types, formatters, GenerationConfig
-Evals/                     AI coach eval CLI (Swift inspect + Python eval runner)
+Evals/                     AI coach evals: coach-eval CLI + CoachEvalKit, real model on Metal
 Models/                    @Model classes, enums (data layer)
 Config/                    ModelContainer setup, environment keys (infrastructure)
 Extensions/                Date arithmetic, formatting (utilities)
@@ -90,16 +90,15 @@ Configured via `ModelConfiguration(cloudKitDatabase: .automatic)` in `ModelConta
 The on-device, tool-calling AI coach (Gemma 4 E2B via MLX-Swift, reached from the Home tab) has its own contributor guide: **[AI_COACH.md](AI_COACH.md)**. In brief:
 
 - **`Packages/AICoachCore/`** is a pure-Swift local package (no MLX, no SwiftData) shared by the app and the `Evals/` CLI: coaching snapshot types, `AICoachPromptBuilder`, the tool vocabulary (`CoachTools`), JSON schemas (`CoachToolSchemas`), the validating `CoachToolDecoder`, and `GenerationConfig`.
-- **`Services/AICoach/`** holds the `AICoachService` protocol (`MLXAICoachService` in production, `StubAICoachService` for previews/tests, injected via `@Environment(\.aiCoach)` with the stub as default), the app-scope `CoachChatStore` (`@Environment(\.coachChat)`), the Hugging Face downloader, `CoachProposalApplier`, SwiftData ↔ core conversions, and speech-to-text.
+- **`Packages/AICoachRuntime/`** is the only code that imports MLX, and both the app and `Evals/` use it: `CoachModelPreset.production` (model id, tool dialect, EOS tokens), `CoachRuntime` (load, then generate → tool call → `CoachEvent`), and the Hugging Face downloader.
+- **`Services/AICoach/`** holds the `AICoachService` protocol (`MLXAICoachService`, a thin adapter over `CoachRuntime`, in production; `StubAICoachService` for previews/tests, injected via `@Environment(\.aiCoach)` with the stub as default), the app-scope `CoachChatStore` (`@Environment(\.coachChat)`), `CoachProposalApplier`, SwiftData ↔ core conversions, and speech-to-text.
 - **The coach proposes, never writes.** Every mutating tool call becomes an Accept/Dismiss card; `HomeView` applies accepted proposals.
 - **Model delivery:** the ~4.3 GB weights are not bundled. They download from Hugging Face only when the athlete taps Download in the chat, with byte-weighted progress, and are cached for offline use.
 
 ### Eval CLI
-The `Evals/` directory contains tools for iterating on the AI coach's prompt outside the iOS app:
-- **`swift run CoachEval inspect --prompt-mode flat|chat|conversation`** — prints the prompt from AICoachCore without running a model (`conversation` shows the tool-calling chat turns and tool schemas the app sends)
-- **`python3 eval_runner.py`** — runs the one-shot prompt through Python MLX and scores output quality (100-point scale). It still pins Gemma 3 4B, so scores do not reflect the production model.
+`Evals/` runs the tool-calling coach against the **production model on the Mac's GPU** through the same `CoachRuntime` the app uses, and grades each turn against scenario expectations. `./coach-eval` offers `list`, `inspect` (prompt only), `chat` (interactive), `run` (graded, multi-sample, `--save`), and `compare` (A/B two saved runs).
 
-See `Evals/README.md` for full documentation.
+See **[EVALS_GUIDE.md](EVALS_GUIDE.md)** for the full guide and `Evals/README.md` for the command reference.
 
 ## Data Flow
 

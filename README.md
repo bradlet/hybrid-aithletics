@@ -82,10 +82,11 @@ Hybrid AIthletics/
   ContentView.swift   Root TabView
   Hybrid_AIthleticsApp.swift  App entry point (injects services)
 Packages/AICoachCore/ Shared coach library: prompt builder, tools, decoder, generation config
-Evals/                AI coach prompt inspection + eval runner
+Packages/AICoachRuntime/ Coach model runtime (MLX): model preset, download, generation loop
+Evals/                AI coach evals against the real model on Metal (see docs/EVALS_GUIDE.md)
 ```
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for architecture documentation, [docs/AI_COACH.md](docs/AI_COACH.md) for the AI coach contributor guide, [docs/DATA_MODEL.md](docs/DATA_MODEL.md) for an in-depth data model reference, [docs/adrs/](docs/adrs/) for architectural decision records, [docs/MOBILE_TESTING.md](docs/MOBILE_TESTING.md) for testing on a physical iPhone, and [docs/RELEASING.md](docs/RELEASING.md) for App Store publishing instructions.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for architecture documentation, [docs/AI_COACH.md](docs/AI_COACH.md) for the AI coach contributor guide, [docs/EVALS_GUIDE.md](docs/EVALS_GUIDE.md) for running and extending the coach evals, [docs/DATA_MODEL.md](docs/DATA_MODEL.md) for an in-depth data model reference, [docs/adrs/](docs/adrs/) for architectural decision records, [docs/MOBILE_TESTING.md](docs/MOBILE_TESTING.md) for testing on a physical iPhone, and [docs/RELEASING.md](docs/RELEASING.md) for App Store publishing instructions.
 
 ## Building
 
@@ -93,7 +94,7 @@ Open `Hybrid AIthletics.xcodeproj` in Xcode 15+ and build for an iOS 17+ simulat
 
 ### AI Coach Model
 
-The AI coach model (~4.3 GB, Gemma 4 E2B 4-bit) is not bundled. It downloads from Hugging Face when the user taps Download on the coach screen (never automatically) and is cached locally for offline access. No developer setup is required — `Services/AICoach/MLXModelLoading.swift` supplies the Hugging Face downloader, since mlx-swift-lm 3.x no longer bundles one.
+The AI coach model (~4.3 GB, Gemma 4 E2B 4-bit) is not bundled. It downloads from Hugging Face when the user taps Download on the coach screen (never automatically) and is cached locally for offline access. No developer setup is required — `Packages/AICoachRuntime/Sources/AICoachRuntime/ModelLoading.swift` supplies the Hugging Face downloader, since mlx-swift-lm 3.x no longer bundles one.
 
 > **Note:** The app compiles, runs, and passes all tests without any model present. All unit tests use `StubAICoachService`.
 

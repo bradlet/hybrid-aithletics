@@ -205,7 +205,7 @@ cd Packages/AICoachCore && swift test
 
 ### App crashes on launch
 - Check Xcode's Debug console (bottom panel) for crash logs
-- Look for error messages like `AICoachError.notImplemented` — this means Gemma weights are missing (expected in debug builds; tests use a stub)
+- Look for error messages like `CoachRuntimeError.runtimeUnavailable` — the MLX packages weren't resolved for this build (tests use a stub, so they never hit it)
 - For other crashes, set a breakpoint and rebuild to debug
 
 ### CloudKit sync not working

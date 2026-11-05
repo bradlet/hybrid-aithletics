@@ -34,22 +34,24 @@ flowchart TD
    `LLMTypeRegistry` model type, `.scales`/`.biases` tensors, and a `group_size` in its
    quantization config. Google QAT exports such as `mlx-community/gemma-4-E2B-it-qat-mobile` fail on
    the missing `group_size`.
-2. **Update `MLXAICoachService`** (`Services/AICoach/MLXAICoachService.swift`):
-   - `modelID`
-   - `approximateDownloadBytes`: the CTA shows this before any network call, so keep it in step with `modelID`
-   - `ModelConfiguration.toolCallFormat` and `extraEOSTokens` for the model family
-     (Gemma 4: `.gemma4` + `<turn|>`; Gemma 3: `.gemma` + `<end_of_turn>`)
+2. **Update `CoachModelPreset.production`** (`Packages/AICoachRuntime/Sources/AICoachRuntime/CoachModelPreset.swift`).
+   The app and the evals both read it:
+   - `id`
+   - `approximateDownloadBytes`: the CTA shows this before any network call, so keep it in step with `id`
+   - `toolCallFormat` (the raw value of mlx-swift-lm's `ToolCallFormat`) and `extraEOSTokens` for the
+     model family (Gemma 4: `"gemma4"` + `<turn|>`; Gemma 3: `"gemma"` + `<end_of_turn>`)
 3. **Re-check the tool-argument dialect.** Gemma 4's `<|"|>` string escape is the reason every tool
    argument is scalar (see `CLAUDE.md` and [AI_COACH.md §9](AI_COACH.md#9-tools)). A different
    family may parse nested values. Don't loosen the schemas without testing on a device.
 4. **Re-check memory.** Compare weight size with the current 4.3 GB and test the smallest supported
-   device for jetsam. `MLX.Memory.cacheLimit` stays at 20 MB.
+   device for jetsam. `MLXAICoachService` keeps the runtime's `memoryCacheLimit` at 20 MB.
 5. **Re-tune `GenerationConfig`** if output degrades (repetition, rambling, tool-call spam).
-6. **Update the evals' model:** `MODEL_ID` in `Evals/eval_runner.py` and `CoachGenerator.modelID` in
-   `Evals/Sources/CoachEval/Generation/CoachGenerator.swift` (both still Gemma 3 4B today).
+6. **Measure it with the evals.** Before switching `production`, add the candidate as a second
+   preset and A/B it: `./coach-eval run --samples 5 --save` on each, then `./coach-eval compare`. See
+   [EVALS_GUIDE.md](EVALS_GUIDE.md#try-a-different-model).
 7. **Update docs:** `CLAUDE.md`, `README.md`, `docs/AI_COACH.md`, `docs/ARCHITECTURE.md`, and ADR 1 (add an amendment).
-8. **Verify on a physical device** with an Xcode build. The simulator takes the `#else
-   notImplemented` path, and SPM command-line builds can't run Metal inference.
+8. **Verify on a physical device** with an Xcode build for memory and speed. The evals cover
+   behaviour; the simulator can't run Metal inference.
 
 ## Option B: Swap the runtime (e.g. LiteRT-LM)
 

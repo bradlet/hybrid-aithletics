@@ -95,7 +95,6 @@ flowchart TB
             Proto["AICoachService protocol"]
             MLX["MLXAICoachService"]
             Stub["StubAICoachService"]
-            Loading["MLXModelLoading<br/>HuggingFaceDownloader,<br/>tokenizer adapter, cache check"]
             Applier["CoachProposalApplier"]
             Conv["CoachTypeConversions"]
             Speech["CoachSpeechService<br/>Live / Stub"]
@@ -113,12 +112,18 @@ flowchart TB
         GenCfg["GenerationConfig"]
     end
 
+    subgraph Runtime["Packages/AICoachRuntime (the only MLX importer)"]
+        RT["CoachRuntime<br/>load, streamChat → CoachEvent"]
+        Preset["CoachModelPreset.production"]
+        Loading["ModelLoading<br/>HuggingFaceDownloader,<br/>tokenizer adapter, cache check"]
+    end
+
     subgraph External["External"]
         HF[("Hugging Face<br/>lmstudio-community/gemma-4-E2B-it-MLX-4bit")]
         MLXLM["mlx-swift-lm 3.32.3<br/>+ swift-transformers 1.3.5"]
     end
 
-    Evals["Evals/ CLI + eval_runner.py"]
+    Evals["Evals/ coach-eval<br/>(CoachEvalKit + CLI)"]
 
     Root --> Home
     Home --> Card & Mic & Chat
@@ -127,13 +132,16 @@ flowchart TB
     Store --> Proto
     Proto -.-> MLX
     Proto -.-> Stub
-    MLX --> Loading --> HF
-    MLX --> MLXLM
-    MLX --> Builder & Schemas & Decoder & GenCfg
+    MLX --> RT
+    RT --> Preset
+    RT --> Loading --> HF
+    RT --> MLXLM
+    RT --> Builder & Schemas & Decoder & GenCfg
     Home --> Conv --> Types
     Home --> Applier --> SD
     Home --> Record --> SD
     Home -- "@Query" --> SD
+    Evals --> RT
     Evals --> Builder & Schemas
 ```
 
@@ -146,7 +154,8 @@ The code is in three layers, and the boundaries between them are enforced on pur
 | Layer | Location | May import | Must NOT import | Why |
 |---|---|---|---|---|
 | **AICoachCore** | `Packages/AICoachCore/` | Foundation | MLX, SwiftData, SwiftUI, app code | Shared with the eval CLI; trivially unit-testable with `swift test` |
-| **Coach services** | `Hybrid AIthletics/Services/AICoach/` | AICoachCore, MLX (gated), SwiftData | SwiftUI views | The only place MLX types exist |
+| **AICoachRuntime** | `Packages/AICoachRuntime/` | AICoachCore, MLX (gated), swift-transformers | SwiftData, SwiftUI, app code | The only place MLX types exist. Shared by the app and `Evals/`, so evals run the exact generation code the app ships |
+| **Coach services** | `Hybrid AIthletics/Services/AICoach/` | AICoachCore, AICoachRuntime, SwiftData | SwiftUI views, MLX | Adapts the runtime to `AICoachService`; owns app state |
 | **Views** | `Hybrid AIthletics/Views/Home/` | AICoachCore, services via `@Environment` | MLX | Views pattern-match `CoachEvent`/`CoachAction`, never MLX `Generation` |
 
 Consequences you will run into:
@@ -159,9 +168,8 @@ Consequences you will run into:
   `FeelingVisuals` wording. The decoder's sets range (1–20) and reps range (1–100) duplicate
   `StrengthPlanDraft`'s steppers. AICoachCore cannot import app code, so if you change one side,
   change the other.
-- **`#if canImport(MLXLLM)`** gates every MLX line. The `#else` branches throw
-  `AICoachError.notImplemented`, so the app compiles and launches where the SPM package isn't
-  resolved.
+- **`#if canImport(MLXLLM)`** gates every MLX line inside AICoachRuntime. The `#else` branches throw
+  `CoachRuntimeError.runtimeUnavailable`.
 
 ---
 
@@ -172,23 +180,29 @@ Consequences you will run into:
 | **Model** | Gemma 4 E2B instruction-tuned, MLX 4-bit: `lmstudio-community/gemma-4-E2B-it-MLX-4bit` (~4.34 GB) |
 | **Runtime** | `mlx-swift-lm` 3.32.3 (`MLXLLM`, `MLXLMCommon`) on `mlx-swift` 0.32.3 |
 | **Hub / tokenizer** | `swift-transformers` 1.3.5 (`Hub`, `Tokenizers`), `swift-jinja` for chat templates |
-| **Where** | `MLXAICoachService.modelID` and `configuration` |
+| **Where** | `CoachModelPreset.production` in `Packages/AICoachRuntime`, read by `CoachRuntime.load` |
 
 ```swift
-ModelConfiguration(
-    id: MLXAICoachService.modelID,
+CoachModelPreset(
+    id: "lmstudio-community/gemma-4-E2B-it-MLX-4bit",
     extraEOSTokens: ["<turn|>"],   // Gemma 4's end-of-turn (Gemma 3 was <end_of_turn>)
-    toolCallFormat: .gemma4        // <|tool_call> … <tool_call|> with <|"|> string escapes
+    toolCallFormat: "gemma4",      // <|tool_call> … <tool_call|> with <|"|> string escapes
+    approximateDownloadBytes: 4_372_000_000
 )
 ```
+
+The preset stores the tool-call format as `ToolCallFormat`'s raw string, so the type needs no MLX
+import. `CoachRuntime.load` maps it back and fails fast on an unknown value. The app and the evals
+both read this one preset.
 
 **Why this exact repo.** The model type `gemma4` is multimodal. `MLXLLM.Gemma4Model` reads
 `text_config` and drops the vision weights, so the model loads text-only. The smaller
 `mlx-community/gemma-4-E2B-it-qat-mobile` (2.40 GB) is a Google QAT export with no `group_size`, and
 mlx-swift-lm cannot load it. Every other Gemma 4 MLX build is 5.4 GB or larger. The header comment on
-`modelID` has the full reasoning.
+`CoachModelPreset.production` has the full reasoning.
 
-**Memory.** `loadModel()` sets `MLX.Memory.cacheLimit = 20 MB` before loading. Without that cap,
+**Memory.** `MLXAICoachService` creates its `CoachRuntime` with `memoryCacheLimit: 20 MB`, which
+`load` applies as `MLX.Memory.cacheLimit` before loading. On a Mac, the evals leave it unset. Without that cap,
 inference buffers accumulate until iOS jetsam kills the process mid-token. The 4.3 GB model is
 heavier than the 3.0 GB Gemma 3 it replaced, so watch for jetsam on non-Pro devices. The app also
 carries the `com.apple.developer.kernel.increased-memory-limit` entitlement.
@@ -197,8 +211,8 @@ carries the `com.apple.developer.kernel.increased-memory-limit` entitlement.
 
 | Preset | maxTokens | temperature | topP | repetitionPenalty | Used by |
 |---|---|---|---|---|---|
-| `production` | 400 | 0.4 | 0.9 | 1.2 | One-shot `suggestAdaptations` / `streamSuggestion` (evals) |
-| `chat` | 512 | 0.6 | 0.95 | 1.2 | **The live chat** (`generateStreamingChat`) |
+| `production` | 400 | 0.4 | 0.9 | 1.2 | One-shot `suggestAdaptations` / `streamSuggestion` |
+| `chat` | 512 | 0.6 | 0.95 | 1.2 | **The live chat** (`CoachRuntime.streamChat`), and the evals' default |
 | `conservative` | 300 | 0.3 | 0.85 | 1.2 | Eval experiments |
 | `lowerRepPenalty` | 400 | 0.4 | 0.9 | 1.2 | Eval experiments (now identical to `production`) |
 
@@ -261,7 +275,7 @@ Opening the chat never starts a multi-gigabyte download on its own. That downloa
 
 ```mermaid
 sequenceDiagram
-    participant S as MLXAICoachService.loadModel
+    participant S as CoachRuntime.load
     participant D as HuggingFaceDownloader
     participant API as huggingface.co/api/models/{id}?blobs=true
     participant Hub as HubApi.snapshot
@@ -319,7 +333,7 @@ sequenceDiagram
     participant V as CoachChatView
     participant H as HomeView
     participant S as CoachChatStore
-    participant C as MLXAICoachService
+    participant C as MLXAICoachService → CoachRuntime
     participant B as AICoachPromptBuilder / CoachToolSchemas
     participant R as mlx-swift-lm (Gemma 4)
     participant Dec as CoachToolDecoder
@@ -362,7 +376,7 @@ All prompt text lives in `AICoachPromptBuilder` (AICoachCore). To see exactly wh
 for a scenario, without loading a model:
 
 ```bash
-cd Evals && swift run CoachEval inspect --scenario high-rpe --prompt-mode conversation
+cd Evals && ./coach-eval inspect --scenario record-yesterday
 ```
 
 ### Turn structure
@@ -404,8 +418,8 @@ cd Evals && swift run CoachEval inspect --scenario high-rpe --prompt-mode conver
    - One tool call per reply.
 
 There is also a legacy **`systemPreamble`** ("respond with 3–5 bullet points, under 200 words"). It
-is used only by the one-shot `suggestAdaptations`/`streamSuggestion` path, which the evals still
-score. The app no longer calls it. Don't merge the two: bullet-list instructions break conversation
+is used only by the one-shot `suggestAdaptations`/`streamSuggestion` path. The app's UI no longer
+calls it, and the evals don't score it. Don't merge the two: bullet-list instructions break conversation
 and tool selection.
 
 ### The training snapshot (`buildDataSections`)
@@ -499,8 +513,8 @@ Weekdays are `Sunday`…`Saturday` → lane index 0…6 (`StrengthDayProposal.we
 
 ## 10. Decoding and validation
 
-`MLXAICoachService.coachEvent(from:)` maps the runtime's `ToolCall` arguments with `.anyValue` and
-calls `CoachToolDecoder.decode(name:arguments:)`.
+`CoachRuntime` maps the runtime's `ToolCall` arguments with `.anyValue` and hands them to
+`CoachEventMapping.event(toolName:arguments:)`, which calls `CoachToolDecoder.decode(name:arguments:)`.
 
 **Don't use the runtime's `ToolCall.execute(with:)`.** It builds a default `JSONDecoder`, whose date
 strategy expects seconds since 2001, so `"2026-04-06"` fails.
@@ -685,11 +699,14 @@ The project rule from `CLAUDE.md`: **every new feature ships with unit tests, at
 | `CoachTypeConversionTests`, `CoachStrengthConversionTests` | `Hybrid AIthleticsTests/Hybrid_AIthleticsTests.swift` | SwiftData ↔ core bridging |
 | `CoachProposalApplierTests` | same | Every apply path and failure |
 | `CoachChatStoreTests` | same | Phases, send/stream, first-proposal-wins, snapshot-once, clear |
-| `StubAICoachServiceTests`, `AICoachDownloadProgressTests`, `HuggingFaceDownloadPatternTests`, `ByteRateMeterTests`, `VoiceDraftTests`, `StubCoachSpeechServiceTests` | same | Service doubles and helpers |
+| `StubAICoachServiceTests`, `AICoachDownloadProgressTests`, `VoiceDraftTests`, `StubCoachSpeechServiceTests` | same | Service doubles and helpers |
+| `CoachModelPresetTests`, `CoachRuntimeTests`, `CoachEventMappingTests`, `HuggingFaceDownloadPatternTests`, `ByteRateMeterTests` | `Packages/AICoachRuntime/Tests/AICoachRuntimeTests/` | Preset, tool-call → event mapping, download helpers (no model) |
+| `CoachEvalKitTests` | `Evals/Tests/CoachEvalKitTests/` | Eval transcript folding, expectations, runner, reports, scenario library |
 | `HomeUITests` | `Hybrid AIthleticsUITests/HomeUITests.swift` | Chat send, proposals, accept/dismiss, rejection, clear, persistence across navigation, voice, the download CTA and progress flow |
 
 ```bash
 cd Packages/AICoachCore && swift test                    # fast, no simulator
+cd Packages/AICoachRuntime && swift test                 # no model, no simulator
 xcodebuild test -scheme "Hybrid AIthletics" -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -only-testing:"Hybrid AIthleticsTests"
 xcodebuild test -scheme "Hybrid AIthletics" -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -only-testing:"Hybrid AIthleticsUITests/HomeUITests"
 ```
@@ -719,32 +736,31 @@ When you add a tool, add a trigger here too.
 
 ### What tests can't tell you
 
-None of these tests run the real model. **Verify model-facing changes (prompt wording, schemas, new
-tools) on a physical device** with an Xcode build. SPM command-line builds don't compile the Metal
-shaders, so Swift-CLI MLX inference produces garbage. The `/verify` skill drives the simulator, and
-the stub there covers UI wiring only.
+None of these tests run the real model. **Run model-facing changes (prompt wording, schemas, new
+tools) through the evals** (`cd Evals && ./coach-eval run`), which generate with the production model
+on the Mac's GPU through the same `CoachRuntime` the app uses. Then confirm on a physical device for
+memory and speed. The `/verify` skill drives the simulator, and the stub there covers UI wiring only.
 
 ---
 
 ## 16. Evals
 
-`Evals/` holds a Swift CLI (`CoachEval`) and a Python runner (`eval_runner.py`). See
-[`Evals/README.md`](../Evals/README.md).
+`Evals/` is a Swift package that runs scenarios against the **production model on Metal** and grades
+the tool-calling chat. **[`docs/EVALS_GUIDE.md`](EVALS_GUIDE.md) is the full guide**, and
+[`Evals/README.md`](../Evals/README.md) is the command reference.
 
-- **`swift run CoachEval inspect --prompt-mode flat|chat|conversation`** prints the exact prompt from
-  AICoachCore. `conversation` prints the tool-calling chat turns and tool schemas. It needs no model
-  and is the fastest way to review prompt changes.
-- **`python3 eval_runner.py`** gets prompts from the Swift CLI and generates with Python `mlx-lm`
-  (Swift CLI builds can't run Metal). It scores the **one-shot** bullet-list output on a 100-point
-  rubric (length, repetition, bullets, actionable verbs, hallucination, ending).
-
-**Limitations:**
-
-- Evals still pin **Gemma 3 4B** (`MODEL_ID` in `eval_runner.py`) and mlx-swift-lm 2.x, so **scores
-  don't reflect the production model**.
-- They score the **legacy one-shot path**, not tool selection or argument quality. There is no
-  automated eval of the tool-calling chat yet. Building one is a high-value contribution: scenario →
-  expected tool + arguments, scored through `CoachToolDecoder`.
+- **Same code as the app.** Generation goes through AICoachRuntime's `CoachRuntime.streamChat`, which
+  is the call `MLXAICoachService` makes, with `CoachModelPreset.production` and
+  `GenerationConfig.chat`. Each scenario pins "today", so relative dates are reproducible.
+- **`CoachEvalKit`** (model-free, unit-tested) holds scenarios, `Expectation` checks, the
+  `TurnTranscript` fold (the same first-proposal-wins rule as `CoachChatStore`), the runner, and
+  JSON run records.
+- **`./coach-eval`** subcommands:
+  - `list`: scenarios.
+  - `inspect`: exact prompt, no model.
+  - `chat`: interactive REPL.
+  - `run`: graded, `--samples N`, `--save`.
+  - `compare`: A/B two saved runs.
 
 ---
 
@@ -791,7 +807,7 @@ flowchart TD
     G["7. HomeView<br/>closure impl + confirmation note"] --> H
     H["8. StubAICoachService.ChatTrigger<br/>+ canned event"] --> I
     I["9. Tests: schema, decoder (happy + every rejection),<br/>applier, store, HomeUITests"] --> J
-    J["10. inspect --prompt-mode conversation,<br/>then verify on a physical device"] --> K
+    J["10. Eval scenarios for the new tool,<br/>./coach-eval run, then a device check"] --> K
     K["11. Update CLAUDE.md architecture notes + this guide"]
 ```
 
@@ -801,10 +817,10 @@ Because `CoachAction` is an exhaustive switch, the compiler points you at most o
 ### Change prompt wording
 
 1. Edit `AICoachPromptBuilder` (or a schema description).
-2. Check it with `swift run CoachEval inspect --scenario high-rpe --prompt-mode conversation`.
+2. Check it with `cd Evals && ./coach-eval inspect --scenario record-yesterday`.
 3. Update `PromptBuilderTests` / `CoachChatPromptTests` assertions.
-4. Test the change in conversation on a device. Small wording changes can noticeably shift tool
-   selection in a 4B model.
+4. Measure it: `./coach-eval run --samples 5 --save` before and after the edit, then
+   `./coach-eval compare`. Small wording changes can noticeably shift tool selection in a 4B model.
 
 ### Add data to the coach's snapshot
 
@@ -817,13 +833,16 @@ Because `CoachAction` is an exhaustive switch, the compiler points you at most o
 
 ### Swap the model
 
-1. Change `MLXAICoachService.modelID` **and** `approximateDownloadBytes`.
-2. Match `ModelConfiguration.toolCallFormat` and `extraEOSTokens` to the model family.
+1. Change `CoachModelPreset.production` in `Packages/AICoachRuntime`: id, size, tool-call format,
+   and EOS tokens together. To compare candidates first, add a second preset and run the evals on it
+   (see `docs/EVALS_GUIDE.md`).
+2. Match `toolCallFormat` and `extraEOSTokens` to the model family.
 3. Confirm the repo is an MLX conversion that mlx-swift-lm can load (it needs `group_size`,
    `.scales`, and `.biases`).
 4. Re-check the memory headroom on the smallest supported device.
 5. Re-check the tool-dialect argument parsing: the scalar-only rule is specific to Gemma 4.
-6. Update `Evals/eval_runner.py` `MODEL_ID`, `CLAUDE.md`, the ADR, and this guide.
+6. Run `./coach-eval run --samples 5 --save` before and after, then `compare`. Update `CLAUDE.md`, the
+   ADR, and this guide.
 7. Bump `CoachModelPhase` copy only if the download size changes noticeably.
 
 ### Swap the runtime (e.g. LiteRT-LM)
@@ -836,25 +855,21 @@ Write a new `AICoachService` conformance that yields `CoachEvent`s, decodes thro
 
 ## 19. Known gaps and gotchas
 
-**Deliberate mismatch**
-
-- `Evals/` (`eval_runner.py` `MODEL_ID` and `CoachGenerator.modelID`) still runs **Gemma 3 4B QAT** on
-  mlx-swift-lm 2.x and scores only the one-shot prompt. This is documented in the Evals README and
-  the code. Moving the evals to Gemma 4 and adding tool-call scoring is open work ([§16](#16-evals)).
-
 **Behavioural gaps worth knowing**
 
 - **Tool calls aren't in the transcript the model sees.** `CoachMessage` carries only text, so on later
   turns the model doesn't know it proposed something or whether the athlete accepted it, apart from
   confirmation notes, which are appended as coach turns.
+- **The training snapshot reaches the model only on the first turn.** `CoachChatStore` sends
+  `context` only with the first request and stores the athlete's *plain* text. Every later request
+  therefore has no snapshot anywhere in its prompt, and the "attached once" data is gone from turn two
+  on. The evals reproduce this behaviour (`EvalScenario.chatRequest()`), so a fix shows up there as
+  multi-turn scenarios being given the data.
 - **The transcript is sent whole on every turn**, with no truncation or summarisation. Very long
   conversations will eventually push the snapshot out of the effective context.
 - **Workout proposals get no confirmation note.** `CoachChatView.accept` resolves the card as soon as
   Accept opens the pre-filled sheet, and `ProposedWorkoutRequest.messageID` is carried but not yet read.
   Cancelling the sheet loses the proposal, and saving adds nothing to the transcript.
-- **Stop may not stop the GPU.** `cancel()` stops the store from consuming the stream, but
-  `MLXAICoachService`'s `AsyncThrowingStream` sets no `onTermination` to cancel its producer `Task`, so
-  generation probably runs on to `maxTokens` in the background.
 - **Metric users:** the prompt shows km, but `distance_miles` arguments are miles, so the model has to
   convert. Watch for unit mistakes in proposals from metric athletes.
 - **Strength lift history and notes** are in the snapshot type but not rendered in the prompt.
@@ -876,8 +891,11 @@ Write a new `AICoachService` conformance that yields `CoachEvent`s, decodes thro
 | `…/GenerationConfig.swift` | Sampling presets |
 | `…/DistanceFormatting.swift`, `DurationFormatting.swift` | Prompt formatting helpers |
 | `Hybrid AIthletics/Services/AICoach/AICoachService.swift` | Protocol, `AICoachDownloadProgress`, `AICoachError` |
-| `…/MLXAICoachService.swift` | Production service: model config, load, chat generation, tool-call decode |
-| `…/MLXModelLoading.swift` | `HuggingFaceDownloader`, `ByteRateMeter`, tokenizer loader + adapter, `isHuggingFaceRepoCached` |
+| `…/MLXAICoachService.swift` | Production service: adapts `CoachRuntime` to `AICoachService` |
+| `Packages/AICoachRuntime/Sources/AICoachRuntime/CoachRuntime.swift` | Model load, `streamChat` (turns → generate → tool call → `CoachEvent`), `streamText` |
+| `…/CoachModelPreset.swift` | `CoachModelPreset.production`: model id, tool dialect, EOS tokens, size |
+| `…/CoachEventMapping.swift` | Raw tool call → `CoachEvent`; `GenerationStats` |
+| `…/ModelLoading.swift` | `HuggingFaceDownloader`, `ByteRateMeter`, tokenizer loader + adapter, `isHuggingFaceRepoCached` |
 | `…/StubAICoachService.swift` | Deterministic double with `ChatTrigger`s and simulated download |
 | `…/CoachChatStore.swift` | `CoachModelPhase`, `CoachChatStore` |
 | `…/CoachProposalApplier.swift` | Applies accepted proposals, `WorkoutPrefill` |
@@ -888,5 +906,5 @@ Write a new `AICoachService` conformance that yields `CoachEvent`s, decodes thro
 | `Hybrid AIthletics/Views/Home/HomeView.swift` | Snapshot builder, proposal application, entry points |
 | `Hybrid AIthletics/Views/Home/CoachChatView.swift` | Chat UI, `CoachMessageBubble`, `ProposalCard` |
 | `Hybrid AIthletics/Views/Home/CoachEntryCard.swift` | Home card |
-| `Evals/` | Prompt inspection CLI and Python eval runner |
+| `Evals/` | `coach-eval` CLI and `CoachEvalKit` (see `docs/EVALS_GUIDE.md`) |
 | `docs/adrs/1-use-lightweight-onboard-llm.md` | Why on-device |

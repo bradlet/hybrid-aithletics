@@ -33,7 +33,7 @@ scripts/inspect-store.sh
 
 # Then, at the sqlite3 prompt:
 SELECT * FROM workouts ORDER BY date DESC;
-SELECT name, planned_mi, completed FROM exercises WHERE repeating = 1;
+SELECT name, date, completed FROM exercises WHERE series_id IS NOT NULL ORDER BY series_id, date;
 
 # One-off query without entering the prompt:
 scripts/inspect-store.sh -q "SELECT COUNT(*) AS done FROM workouts;"
@@ -68,7 +68,8 @@ ZDURATIONSECONDS → durationSeconds (planned target)
 ZDISTANCEMILES   → distanceMiles   (planned target)
 ZNOTES           → notes
 ZDATE            → date            (Core Data epoch — see above)
-ZISREPEATING     → isRepeating     (0/1)
+ZSERIESID        → seriesID        (UUID blob, NULL = one-off)
+ZCOUNTSTOWARDMILEAGE → countsTowardMileage (0/1)
 ZID              → id (UUID, stored as a blob)
 ZWORKOUTDATA     → workout         (JSON blob, NULL = planned only)
 ```
@@ -124,7 +125,7 @@ One-liner without entering the prompt:
 
 ```bash
 sqlite3 -header -column "$APP/Library/Application Support/default.store" \
-  "SELECT ZNAME, ZISREPEATING, (ZWORKOUTDATA IS NOT NULL) AS completed FROM ZEXERCISE ORDER BY ZDATE DESC;"
+  "SELECT ZNAME, hex(ZSERIESID) AS series, (ZWORKOUTDATA IS NOT NULL) AS completed FROM ZEXERCISE ORDER BY ZDATE DESC;"
 ```
 
 ### A note on the `-wal` / `-shm` files

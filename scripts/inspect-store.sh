@@ -95,7 +95,8 @@ SELECT Z_PK                                                       AS pk,
        datetime(ZDATE + 978307200, 'unixepoch', 'localtime')      AS date,
        ZDURATIONSECONDS                                           AS planned_dur_s,
        ZDISTANCEMILES                                             AS planned_mi,
-       ZISREPEATING                                               AS repeating,
+       hex(ZSERIESID)                                             AS series_id,
+       ZCOUNTSTOWARDMILEAGE                                       AS counts_toward_mileage,
        (ZWORKOUTDATA IS NOT NULL)                                 AS completed,
        ZNOTES                                                     AS notes
 FROM ZEXERCISE;
@@ -107,7 +108,8 @@ SELECT Z_PK                                                          AS exercise
        datetime(ZDATE + 978307200, 'unixepoch', 'localtime')         AS date,
        json_extract(CAST(ZWORKOUTDATA AS TEXT), '$.distanceMiles')   AS actual_mi,
        json_extract(CAST(ZWORKOUTDATA AS TEXT), '$.durationSeconds') AS actual_dur_s,
-       json_extract(CAST(ZWORKOUTDATA AS TEXT), '$.feltRating')      AS rpe,
+       json_extract(CAST(ZWORKOUTDATA AS TEXT), '$.feeling')         AS feeling,
+       json_extract(CAST(ZWORKOUTDATA AS TEXT), '$.perceivedExertion') AS rpe,
        json_extract(CAST(ZWORKOUTDATA AS TEXT), '$.source')          AS source,
        json_extract(CAST(ZWORKOUTDATA AS TEXT), '$.externalID')      AS external_id,
        ZNOTES                                                        AS planned_notes

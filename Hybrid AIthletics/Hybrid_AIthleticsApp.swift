@@ -19,8 +19,7 @@ struct Hybrid_AIthleticsApp: App {
     /// Shared on-device coach instance. Uses MLX-Swift to run Gemma 4 E2B
     /// on-device. The weights download from Hugging Face only when the athlete
     /// opts in from the coach chat, and are cached locally for offline access.
-    /// When the MLX-Swift
-    /// package is not available, invocations throw `AICoachError.notImplemented`.
+    /// The model code itself lives in the AICoachRuntime package.
     ///
     /// Under `-uiTestSeed` this is the stub instead: a UI test must never
     /// trigger the multi-gigabyte model download, and the stub's scripted replies are

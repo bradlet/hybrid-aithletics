@@ -11,11 +11,8 @@
 		1C9E36B92FA2550C0022393D /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = 1C9E36B82FA2550C0022393D /* GoogleSignIn */; };
 		1C9E36BB2FA2550C0022393D /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 1C9E36BA2FA2550C0022393D /* GoogleSignInSwift */; };
 		1CCF39D82F88A594009D4D21 /* AICoachCore in Frameworks */ = {isa = PBXBuildFile; productRef = AA0001032FA6B00000000001 /* AICoachCore */; };
-		1CD325422F849D6D00F2A1B5 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = 1CD325412F849D6D00F2A1B5 /* MLXLLM */; };
-		1CD325442F849D6D00F2A1B5 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = 1CD325432F849D6D00F2A1B5 /* MLXLMCommon */; };
+		CC0003012FC0D00000000001 /* AICoachRuntime in Frameworks */ = {isa = PBXBuildFile; productRef = CC0003022FC0D00000000001 /* AICoachRuntime */; };
 		AA0001012FA6B00000000001 /* AICoachCore in Frameworks */ = {isa = PBXBuildFile; productRef = AA0001022FA6B00000000001 /* AICoachCore */; };
-		BB0002032FB0C00000000001 /* Hub in Frameworks */ = {isa = PBXBuildFile; productRef = BB0002012FB0C00000000001 /* Hub */; };
-		BB0002042FB0C00000000001 /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = BB0002022FB0C00000000001 /* Tokenizers */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -80,12 +77,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				1C9E36BB2FA2550C0022393D /* GoogleSignInSwift in Frameworks */,
-				1CD325442F849D6D00F2A1B5 /* MLXLMCommon in Frameworks */,
 				1C9E36B92FA2550C0022393D /* GoogleSignIn in Frameworks */,
-				1CD325422F849D6D00F2A1B5 /* MLXLLM in Frameworks */,
 				AA0001012FA6B00000000001 /* AICoachCore in Frameworks */,
-				BB0002032FB0C00000000001 /* Hub in Frameworks */,
-				BB0002042FB0C00000000001 /* Tokenizers in Frameworks */,
+				CC0003012FC0D00000000001 /* AICoachRuntime in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -157,11 +151,8 @@
 			);
 			name = "Hybrid AIthletics";
 			packageProductDependencies = (
-				1CD325412F849D6D00F2A1B5 /* MLXLLM */,
-				1CD325432F849D6D00F2A1B5 /* MLXLMCommon */,
-				BB0002012FB0C00000000001 /* Hub */,
-				BB0002022FB0C00000000001 /* Tokenizers */,
 				AA0001022FA6B00000000001 /* AICoachCore */,
+				CC0003022FC0D00000000001 /* AICoachRuntime */,
 				1C9E36B82FA2550C0022393D /* GoogleSignIn */,
 				1C9E36BA2FA2550C0022393D /* GoogleSignInSwift */,
 			);
@@ -249,10 +240,9 @@
 			mainGroup = 1C1476C82F817B6800DCF85D;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				1CD325402F849D6D00F2A1B5 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
 				AA0001042FA6B00000000001 /* XCLocalSwiftPackageReference "Packages/AICoachCore" */,
+				CC0003032FC0D00000000001 /* XCLocalSwiftPackageReference "Packages/AICoachRuntime" */,
 				1C9E36B62FA24CDB0022393D /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
-				BB0002002FB0C00000000001 /* XCRemoteSwiftPackageReference "swift-transformers" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 1C1476D22F817B6800DCF85D /* Products */;
@@ -336,7 +326,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = "Hybrid AIthletics/Hybrid_AIthletics.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 19;
+				CURRENT_PROJECT_VERSION = 20;
 				DEVELOPMENT_TEAM = CB9HS9S84R;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -375,7 +365,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = "Hybrid AIthletics/Hybrid_AIthletics.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 19;
+				CURRENT_PROJECT_VERSION = 20;
 				DEVELOPMENT_TEAM = CB9HS9S84R;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -656,6 +646,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/AICoachCore;
 		};
+		CC0003032FC0D00000000001 /* XCLocalSwiftPackageReference "Packages/AICoachRuntime" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/AICoachRuntime;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
@@ -665,22 +659,6 @@
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 9.1.0;
-			};
-		};
-		1CD325402F849D6D00F2A1B5 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/ml-explore/mlx-swift-lm";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 3.32.3;
-			};
-		};
-		BB0002002FB0C00000000001 /* XCRemoteSwiftPackageReference "swift-transformers" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/huggingface/swift-transformers";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.3.5;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
@@ -696,16 +674,6 @@
 			package = 1C9E36B62FA24CDB0022393D /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
 			productName = GoogleSignInSwift;
 		};
-		1CD325412F849D6D00F2A1B5 /* MLXLLM */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 1CD325402F849D6D00F2A1B5 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
-			productName = MLXLLM;
-		};
-		1CD325432F849D6D00F2A1B5 /* MLXLMCommon */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 1CD325402F849D6D00F2A1B5 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
-			productName = MLXLMCommon;
-		};
 		AA0001022FA6B00000000001 /* AICoachCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = AICoachCore;
@@ -714,15 +682,9 @@
 			isa = XCSwiftPackageProductDependency;
 			productName = AICoachCore;
 		};
-		BB0002012FB0C00000000001 /* Hub */ = {
+		CC0003022FC0D00000000001 /* AICoachRuntime */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = BB0002002FB0C00000000001 /* XCRemoteSwiftPackageReference "swift-transformers" */;
-			productName = Hub;
-		};
-		BB0002022FB0C00000000001 /* Tokenizers */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = BB0002002FB0C00000000001 /* XCRemoteSwiftPackageReference "swift-transformers" */;
-			productName = Tokenizers;
+			productName = AICoachRuntime;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

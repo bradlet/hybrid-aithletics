@@ -1,6 +1,6 @@
 //
 //  MLXModelLoading.swift
-//  Hybrid AIthletics
+//  AICoachRuntime
 //
 //  Hugging Face model delivery for the on-device coach.
 //
@@ -10,8 +10,9 @@
 //  conformances. This file is that supply — it wires swift-transformers' `HubApi`
 //  and `AutoTokenizer` into the shapes `LLMModelFactory.loadContainer` wants.
 //
-//  Everything here is gated behind `#if canImport(MLXLLM)` so the app still
-//  compiles where the MLX packages have not been resolved.
+//  Moved here from the app target so the iOS app and the `Evals/` CLI load the
+//  model through the same code. Everything is gated behind
+//  `#if canImport(MLXLLM)`, matching the rest of the coach's MLX code.
 //
 
 import Foundation
@@ -56,13 +57,14 @@ import Tokenizers
 /// back to forwarding `HubApi`'s own progress rather than showing nothing.
 ///
 /// Don't "simplify" this back into a single `snapshot` call over all patterns.
-struct HuggingFaceDownloader: Downloader {
+public struct HuggingFaceDownloader: Downloader {
 
     /// The Hub client used for snapshot downloads. `HubApi.shared` caches under
     /// the default `downloadBase`, which the cache check also reads.
-    let hub: HubApi
+    public let hub: HubApi
 
-    init(hub: HubApi = .shared) {
+    /// Creates a downloader over `hub`.
+    public init(hub: HubApi = .shared) {
         self.hub = hub
     }
 
@@ -77,7 +79,7 @@ struct HuggingFaceDownloader: Downloader {
     ///     reported `Progress` carries a smoothed bytes-per-second rate under
     ///     `ProgressUserInfoKey.throughputKey`.
     /// - Returns: The local directory holding the snapshot.
-    func download(
+    public func download(
         id: String,
         revision: String?,
         matching patterns: [String],
@@ -164,7 +166,7 @@ struct HuggingFaceDownloader: Downloader {
     /// Size in bytes of every repository file matching `patterns`, keyed by
     /// filename. Empty when the lookup fails (offline, rate limited, private
     /// repo) or when no file both matches and reports a size.
-    static func remoteFileSizes(
+    public static func remoteFileSizes(
         repoID: String,
         revision: String?,
         matching patterns: [String]
@@ -206,7 +208,7 @@ struct HuggingFaceDownloader: Downloader {
     ///
     /// Only the `*.ext` and `*` forms MLX actually uses are handled; anything
     /// more exotic is treated as a literal name.
-    static func matches(_ filename: String, patterns: [String]) -> Bool {
+    public static func matches(_ filename: String, patterns: [String]) -> Bool {
         for pattern in patterns {
             if pattern == "*" { return true }
             if pattern.hasPrefix("*.") {
@@ -229,7 +231,7 @@ struct HuggingFaceDownloader: Downloader {
 /// A class with a lock rather than an actor: it is driven from whichever thread
 /// `URLSession` calls back on, inside a synchronous `@Sendable` closure that
 /// cannot await.
-final class ByteRateMeter: @unchecked Sendable {
+public final class ByteRateMeter: @unchecked Sendable {
 
     /// Weight given to the newest sample. Low enough that one stalled interval
     /// doesn't read as a stop.
@@ -248,11 +250,14 @@ final class ByteRateMeter: @unchecked Sendable {
     private var lastSampledAt: Date?
     private var smoothed: Double?
 
+    /// Creates a meter with no samples yet.
+    public init() {}
+
     /// Folds a cumulative byte count into the rate estimate.
     /// - Parameter bytes: Total bytes transferred so far.
     /// - Returns: The smoothed rate in bytes per second, or `nil` before enough
     ///   time has passed to compute one.
-    func sample(bytes: Int64) -> Double? {
+    public func sample(bytes: Int64) -> Double? {
         lock.lock()
         defer { lock.unlock() }
 
@@ -282,20 +287,21 @@ final class ByteRateMeter: @unchecked Sendable {
 // MARK: - Tokenizer
 
 /// Loads a tokenizer from a downloaded snapshot directory.
-struct HuggingFaceTokenizerLoader: TokenizerLoader {
+public struct HuggingFaceTokenizerLoader: TokenizerLoader {
 
     /// The Hub client passed through to `AutoTokenizer`. Unused for local
     /// loading, but the API requires one.
-    let hub: HubApi
+    public let hub: HubApi
 
-    init(hub: HubApi = .shared) {
+    /// Creates a loader over `hub`.
+    public init(hub: HubApi = .shared) {
         self.hub = hub
     }
 
     /// Reads `tokenizer.json` / `tokenizer_config.json` out of `directory`.
     /// - Parameter directory: A snapshot directory produced by `HuggingFaceDownloader`.
     /// - Returns: The tokenizer, adapted to `MLXLMCommon.Tokenizer`.
-    func load(from directory: URL) async throws -> any MLXLMCommon.Tokenizer {
+    public func load(from directory: URL) async throws -> any MLXLMCommon.Tokenizer {
         let tokenizer = try await AutoTokenizer.from(modelFolder: directory, hubApi: hub)
         return MLXTokenizerAdapter(wrapped: tokenizer)
     }
@@ -363,7 +369,7 @@ struct MLXTokenizerAdapter: MLXLMCommon.Tokenizer {
 ///   - modelID: Hugging Face repository identifier.
 ///   - hub: The Hub client whose `downloadBase` to inspect.
 /// - Returns: `true` when the snapshot looks complete enough to load offline.
-func isHuggingFaceRepoCached(_ modelID: String, hub: HubApi = .shared) -> Bool {
+public func isHuggingFaceRepoCached(_ modelID: String, hub: HubApi = .shared) -> Bool {
     let directory = hub.localRepoLocation(Hub.Repo(id: modelID))
     let fileManager = FileManager.default
 

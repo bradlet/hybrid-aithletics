@@ -19,6 +19,8 @@ struct AddExerciseSheet: View {
     let exercise: Exercise?
     /// The default date when creating a new exercise.
     let defaultDate: Date
+    /// Favorites offered by the "Start from Favorite" menu in create mode.
+    let favorites: [FavoriteWorkout]
 
     @State private var name = ""
     @State private var type: ExerciseType = .run
@@ -41,9 +43,10 @@ struct AddExerciseSheet: View {
     /// Whether the series-scope save dialog is showing (edit mode, series member).
     @State private var showSeriesSaveDialog = false
 
-    init(exercise: Exercise?, defaultDate: Date) {
+    init(exercise: Exercise?, defaultDate: Date, favorites: [FavoriteWorkout] = []) {
         self.exercise = exercise
         self.defaultDate = defaultDate
+        self.favorites = favorites
         _scheduledDate = State(initialValue: defaultDate)
         let threeMonthsOut = Calendar.current.date(byAdding: .month, value: 3, to: defaultDate) ?? defaultDate
         _seriesEndDate = State(initialValue: threeMonthsOut)
@@ -58,6 +61,9 @@ struct AddExerciseSheet: View {
     var body: some View {
         NavigationStack {
             Form {
+                if exercise == nil {
+                    FavoriteMenuSection(favorites: favorites) { apply($0) }
+                }
                 nameAndTypeSection
                 durationSection
                 distanceSection
@@ -242,6 +248,19 @@ struct AddExerciseSheet: View {
             name = type.rawValue
             scheduledDate = defaultDate
         }
+    }
+
+    /// Fills the plan's identity and targets from a favorite, leaving the
+    /// date, recurrence and notes as the athlete set them.
+    private func apply(_ favorite: FavoriteWorkout) {
+        let values = FavoriteFormValues(favorite, metric: useMetricUnits)
+        name = values.name
+        type = values.type
+        hours = values.hours
+        minutes = values.minutes
+        seconds = values.seconds
+        distance = values.displayDistance
+        countsTowardMileage = values.countsTowardMileage
     }
 
     /// Planned duration from the wheel pickers, in seconds.

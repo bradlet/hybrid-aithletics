@@ -16,6 +16,8 @@ struct AerobicTrainingView: View {
     @Environment(\.useMetricUnits) private var useMetricUnits
     @Environment(\.weekStartDay) private var weekStartDay
     @Query private var allExercises: [Exercise]
+    @Query(sort: [SortDescriptor(\FavoriteWorkout.sortOrder), SortDescriptor(\FavoriteWorkout.createdAt)])
+    private var favorites: [FavoriteWorkout]
 
     /// The month displayed in the monthly calendar.
     @State private var selectedMonth: Date = Date()
@@ -130,7 +132,7 @@ struct AerobicTrainingView: View {
             .navigationTitle("Aerobic Training")
             .navigationBarTitleDisplayMode(.inline)
             .sheet(item: $addExerciseRequest) { request in
-                AddExerciseSheet(exercise: nil, defaultDate: request.date)
+                AddExerciseSheet(exercise: nil, defaultDate: request.date, favorites: favorites)
                     .onDisappear {
                         // After scheduling, navigate to and highlight the day so the
                         // user sees their new exercise in the weekly view.
@@ -147,7 +149,7 @@ struct AerobicTrainingView: View {
                 WorkoutDetailSheet(exercise: exercise)
             }
             .sheet(item: $quickAddRequest) { request in
-                RecordWorkoutSheet(exercise: nil, defaultDate: request.date)
+                RecordWorkoutSheet(exercise: nil, defaultDate: request.date, favorites: favorites)
             }
             .onChange(of: exerciseNavigationRequest) { _, newValue in
                 guard let request = newValue else { return }

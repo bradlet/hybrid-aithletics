@@ -152,7 +152,8 @@ struct HomeView: View {
                 RecordWorkoutSheet(
                     exercise: nil,
                     defaultDate: request.date,
-                    initialFavorite: request.favorite
+                    initialFavorite: request.favorite,
+                    favorites: favorites
                 )
             }
             .sheet(isPresented: $isManagingFavorites) {

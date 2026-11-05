@@ -31,6 +31,8 @@ struct RecordWorkoutSheet: View {
     var prefill: CoachProposalApplier.WorkoutPrefill? = nil
     /// A favorite to pre-fill a quick add from (a Home favorite chip), or nil.
     var initialFavorite: FavoriteWorkout? = nil
+    /// Favorites offered by the "Start from Favorite" menu on a quick add.
+    var favorites: [FavoriteWorkout] = []
 
     @State private var name = ""
     @State private var type: ExerciseType = .run
@@ -53,6 +55,11 @@ struct RecordWorkoutSheet: View {
     var body: some View {
         NavigationStack {
             Form {
+                // Only a blank quick add can start from a favorite: a planned
+                // exercise or a coach proposal already says what the workout is.
+                if exercise == nil && prefill == nil {
+                    FavoriteMenuSection(favorites: favorites) { apply($0) }
+                }
                 WorkoutFormFields(
                     name: $name,
                     type: $type,

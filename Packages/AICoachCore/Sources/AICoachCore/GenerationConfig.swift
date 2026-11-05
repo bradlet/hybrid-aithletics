@@ -8,10 +8,11 @@
 
 import Foundation
 
-/// Configuration for LLM text generation. The `production` preset is the
-/// canonical configuration used by the live app.
+/// Configuration for LLM text generation. The live app's conversational coach
+/// uses `chat`; `production` is the one-shot preset the evals score.
 ///
-/// Parameters are tuned for Gemma 3 4B QAT 4-bit:
+/// The defaults were tuned against Gemma 3 4B QAT 4-bit and carried over to
+/// the current production model, Gemma 4 E2B. Parameters:
 ///
 /// - `temperature` — controls randomness. Lower values produce more focused,
 ///   deterministic output.
@@ -43,7 +44,8 @@ public struct GenerationConfig: Codable, Sendable {
         self.repetitionContextSize = repetitionContextSize
     }
 
-    /// The app's current production configuration.
+    /// One-shot preset: the bullet-list `suggestAdaptations` / `streamSuggestion`
+    /// path, which the evals score. The live chat uses `chat` instead.
     public static let production = GenerationConfig()
 
     /// Conversational preset used by the chat coach.
@@ -59,8 +61,8 @@ public struct GenerationConfig: Codable, Sendable {
         topP: 0.95
     )
 
-    /// Experimental: lower repetition penalty — less needed with proper
-    /// chat template formatting.
+    /// Experimental: kept for eval comparisons. Its repetition penalty is 1.2,
+    /// the same as the default, so it is currently identical to `production`.
     public static let lowerRepPenalty = GenerationConfig(
         repetitionPenalty: 1.2
     )

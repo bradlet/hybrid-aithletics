@@ -68,7 +68,7 @@ struct HuggingFaceDownloader: Downloader {
 
     /// Downloads (or retrieves from cache) the files matching `patterns`.
     /// - Parameters:
-    ///   - id: Hugging Face repository identifier, e.g. `"mlx-community/gemma-3-4b-it-qat-4bit"`.
+    ///   - id: Hugging Face repository identifier, e.g. `"lmstudio-community/gemma-4-E2B-it-MLX-4bit"`.
     ///   - revision: Branch, tag, or commit. `nil` means the repository default.
     ///   - patterns: Glob patterns selecting which files to fetch.
     ///   - useLatest: Ignored — `HubApi` always prefers its cache when present,

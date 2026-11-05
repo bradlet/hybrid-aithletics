@@ -5,7 +5,7 @@
 //  Protocol abstraction over the on-device coaching model so that the
 //  rest of the app never directly depends on MLX (or any specific runtime).
 //  Implementations include StubAICoachService (used in previews and tests)
-//  and MLXAICoachService (production, backed by Gemma 3 4B).
+//  and MLXAICoachService (production, backed by Gemma 4 E2B).
 //
 
 import Foundation

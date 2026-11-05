@@ -4,8 +4,8 @@
 //
 //  Production AI coach backed by Gemma 4 E2B running on-device via MLX-Swift.
 //
-//  The model is downloaded from Hugging Face on first use and cached locally
-//  for offline access. The real implementation compiles when the `MLXLLM`
+//  The model is downloaded from Hugging Face when the athlete opts in (see
+//  CoachChatStore.downloadModel) and cached locally for offline access. The real implementation compiles when the `MLXLLM`
 //  module is available (mlx-swift-lm SPM package, >= 3.32.3). The #else
 //  branches throw AICoachError.notImplemented so the app stays launchable on
 //  hosts where the package has not been resolved.
@@ -25,8 +25,10 @@ import MLXLMCommon
 /// Coaching service backed by Gemma 4 E2B downloaded from Hugging Face and run
 /// on-device via MLX-Swift.
 ///
-/// The model is downloaded lazily on the first call and cached in the app's
-/// caches directory. Subsequent launches load the cached copy (works offline).
+/// The weights are downloaded by `loadModel()` — which `CoachChatStore` only
+/// calls for a missing model after the athlete taps Download — and cached in
+/// `HubApi`'s download directory. Subsequent launches load the cached copy
+/// (works offline).
 /// Callers should create a single shared instance at the app root and inject
 /// it via `@Environment(\.aiCoach)`.
 final class MLXAICoachService: AICoachService, @unchecked Sendable {

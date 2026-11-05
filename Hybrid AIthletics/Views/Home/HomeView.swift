@@ -404,7 +404,8 @@ private struct QuickAddWorkoutRequest: Identifiable {
 private struct ProposedWorkoutRequest: Identifiable {
     let id = UUID()
     let prefill: CoachProposalApplier.WorkoutPrefill
-    /// The coach turn the proposal came from, so it can be resolved on save.
+    /// The coach turn the proposal came from. Not read yet: the proposal is
+    /// resolved when Accept opens the sheet, not when the sheet saves.
     let messageID: UUID
 }
 

@@ -16,9 +16,10 @@ import GoogleSignIn
 struct Hybrid_AIthleticsApp: App {
     var sharedModelContainer: ModelContainer = Self.makeContainerForLaunch()
 
-    /// Shared on-device coach instance. Uses MLX-Swift to download and run
-    /// Gemma 3 4B on-device. The model is downloaded from Hugging Face on
-    /// first use and cached locally for offline access. When the MLX-Swift
+    /// Shared on-device coach instance. Uses MLX-Swift to run Gemma 4 E2B
+    /// on-device. The weights download from Hugging Face only when the athlete
+    /// opts in from the coach chat, and are cached locally for offline access.
+    /// When the MLX-Swift
     /// package is not available, invocations throw `AICoachError.notImplemented`.
     ///
     /// Under `-uiTestSeed` this is the stub instead: a UI test must never

@@ -463,8 +463,10 @@ struct CoachChatView: View {
     private func accept(_ action: CoachAction, from messageID: UUID) {
         switch action {
         case .recordWorkout(let proposal):
-            // Resolved when the record sheet saves, not here — the athlete is
-            // still one confirmation away.
+            // The card is cleared as soon as the pre-filled record sheet opens;
+            // the sheet itself is the athlete's final confirmation. Cancelling
+            // the sheet therefore discards the proposal, and saving appends no
+            // confirmation note to the transcript.
             store.resolveProposal(for: messageID)
             onAcceptWorkout(proposal, messageID)
         case .suggestScheduleChange(let proposal):

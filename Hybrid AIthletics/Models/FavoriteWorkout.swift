@@ -60,3 +60,18 @@ final class FavoriteWorkout {
         self.createdAt = Date()
     }
 }
+
+// MARK: - Display
+
+extension FavoriteWorkout {
+    /// One-line target summary for rows and menus, e.g. "5.0 mi · 45:00".
+    /// Unset targets are omitted; empty when the favorite has neither.
+    /// - Parameter metric: Whether to show kilometres.
+    /// - Returns: The summary string.
+    func targetSummary(metric: Bool) -> String {
+        var parts: [String] = []
+        if distanceMiles > 0 { parts.append(distanceMiles.formattedDistance(metric: metric)) }
+        if durationSeconds > 0 { parts.append(durationSeconds.formattedDuration) }
+        return parts.joined(separator: " · ")
+    }
+}

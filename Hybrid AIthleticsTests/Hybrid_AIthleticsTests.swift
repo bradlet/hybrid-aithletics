@@ -7167,6 +7167,18 @@ struct FavoriteWorkoutTests {
         #expect(fetched.first?.durationSeconds == 2400)
         #expect(fetched.first?.sortOrder == 1)
     }
+
+    @Test func targetSummaryJoinsSetTargets() {
+        let favorite = FavoriteWorkout(name: "Loop", distanceMiles: 5, durationSeconds: 2700)
+        #expect(favorite.targetSummary(metric: false) == "5.0 mi · 45:00")
+        #expect(favorite.targetSummary(metric: true) == "8.0 km · 45:00")
+    }
+
+    @Test func targetSummaryOmitsUnsetTargets() {
+        #expect(FavoriteWorkout(name: "Swim", durationSeconds: 1800).targetSummary(metric: false) == "30:00")
+        #expect(FavoriteWorkout(name: "Ride", distanceMiles: 20).targetSummary(metric: false) == "20.0 mi")
+        #expect(FavoriteWorkout(name: "Blank").targetSummary(metric: false) == "")
+    }
 }
 
 // MARK: - FavoriteFormValues Tests

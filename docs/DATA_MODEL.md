@@ -12,7 +12,7 @@ Hybrid AIthletics uses **SwiftData**, Apple's ORM framework built on top of Core
 
 ## Entity-Relationship Diagram
 
-The persisted `@Model` entities are `Exercise`, `StrengthExercise`, `UserLibraryExercise`, and `AppConfiguration` (`ModelContainerFactory`'s schema). Recorded-instance data does **not** get its own table: `Exercise.workout` is a `Workout` value struct and `StrengthExercise.workouts` is a `[StrengthWorkout]` array, each JSON-encoded into a `Data?` column on its owner. An exercise with `workout == nil` is planned only; a non-nil `workout` means it was recorded.
+The persisted `@Model` entities are `Exercise`, `StrengthExercise`, `UserLibraryExercise`, `FavoriteWorkout`, and `AppConfiguration` (`ModelContainerFactory`'s schema). Recorded-instance data does **not** get its own table: `Exercise.workout` is a `Workout` value struct and `StrengthExercise.workouts` is a `[StrengthWorkout]` array, each JSON-encoded into a `Data?` column on its owner. An exercise with `workout == nil` is planned only; a non-nil `workout` means it was recorded.
 
 ```mermaid
 erDiagram
@@ -58,6 +58,16 @@ erDiagram
     UserLibraryExercise {
         String id
         String name
+    }
+    FavoriteWorkout {
+        UUID id
+        String name
+        ExerciseType type
+        Double distanceMiles "0 = none"
+        Int durationSeconds "0 = none"
+        Bool countsTowardMileage
+        Int sortOrder "manual order"
+        Date createdAt
     }
     AppConfiguration {
         Bool useMetricUnits
@@ -129,6 +139,27 @@ When the coach serializes recent workouts into its prompt (see `Packages/AICoach
 ```
 
 `HomeView.buildCoachRequest()` builds the coach's "recent workouts" from completed exercises (`isCompleted`) in the last 4 weeks and its "upcoming exercises" from planned-only ones in the next 2 weeks; `CoachWorkout(from:)` reads the exercise's `date`/`type` plus the recorded `workout` metrics. A coach `record_workout` proposal carries the same two independent optionals and pre-fills `RecordWorkoutSheet` with them, so an unstated rating stays unrecorded. See [docs/AI_COACH.md](AI_COACH.md) for the coach and [docs/adrs/1-use-lightweight-onboard-llm.md](adrs/1-use-lightweight-onboard-llm.md) for the broader architectural decision.
+
+---
+
+### FavoriteWorkout
+
+**File:** `Models/FavoriteWorkout.swift`
+
+A saved aerobic workout preset. Picking one pre-fills the record (quick add) and schedule sheets with its identity and targets. It is a preset, not a workout: it has no relationship to `Exercise`, carries no date, notes or ratings, and is not exported to Google Sheets.
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `id` | `UUID` | `UUID()` | Unique identifier. |
+| `name` | `String` | `""` | Display name. Duplicates are allowed. |
+| `type` | `ExerciseType` | `.run` | Exercise type to pre-fill. |
+| `distanceMiles` | `Double` | `0.0` | Target distance in miles; `0` means none. |
+| `durationSeconds` | `Int` | `0` | Target duration; `0` means none. |
+| `countsTowardMileage` | `Bool` | `true` | Copied onto workouts started from it. |
+| `sortOrder` | `Int` | `0` | Manual order (drag to reorder); ties break on `createdAt`. |
+| `createdAt` | `Date` | `Date()` | Creation timestamp. |
+
+Conversion to form state (display units, h/m/s) goes through `FavoriteFormValues`, and every mutation through `FavoriteWorkoutEditor` (`Services/Favorites/FavoriteWorkoutEditor.swift`).
 
 ---
 
@@ -271,7 +302,7 @@ A factory enum (no instances, only static methods) that creates SwiftData's `Mod
 | `makeContainer()` | On-disk (SQLite) | Enabled (`.automatic`) | Production app |
 | `makePreviewContainer()` | In-memory only | Disabled | Unit tests and SwiftUI previews |
 
-The schema is explicitly defined as `[Exercise.self, StrengthExercise.self, UserLibraryExercise.self, AppConfiguration.self]`. `Workout` and `StrengthWorkout` are **not** in the schema — they are Codable values JSON-encoded onto their owning `@Model`, not separate entities.
+The schema is explicitly defined as `[Exercise.self, StrengthExercise.self, UserLibraryExercise.self, FavoriteWorkout.self, AppConfiguration.self]`. `Workout` and `StrengthWorkout` are **not** in the schema — they are Codable values JSON-encoded onto their owning `@Model`, not separate entities.
 
 ### UnitEnvironment
 

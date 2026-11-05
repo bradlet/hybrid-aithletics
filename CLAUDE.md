@@ -30,7 +30,7 @@ cd Evals && swift run CoachEval inspect --scenario high-rpe --prompt-mode conver
 The AI coach has a full contributor guide in `docs/AI_COACH.md` — keep it in step with the coach notes below.
 
 - **No ViewModels** — `@Query` in top-level views only (`HomeView`, `AerobicTrainingView`, `StrengthTrainingView`, `HistoryView`, `SettingsView`, `ContentView`). Child views receive data as `let` parameters. App-scope observable state that isn't a ViewModel (owns no queries, makes no view decisions) is a `@MainActor @Observable` service injected via `@Environment` — see `GoogleSheetsSyncCoordinator` and `CoachChatStore`.
-- **Models**: `Exercise` (a planned and/or recorded activity), `Workout` (its recorded actuals — a Codable value JSON-encoded on the exercise, not a `@Model`), `StrengthExercise` (strength board card, with `StrengthWorkout` lift records encoded the same way), `UserLibraryExercise` (custom library entries), `AppConfiguration` (preferences), `ExerciseType` (enum)
+- **Models**: `Exercise` (a planned and/or recorded activity), `Workout` (its recorded actuals — a Codable value JSON-encoded on the exercise, not a `@Model`), `StrengthExercise` (strength board card, with `StrengthWorkout` lift records encoded the same way), `UserLibraryExercise` (custom library entries), `FavoriteWorkout` (saved aerobic presets), `AppConfiguration` (preferences), `ExerciseType` (enum)
 - **Distance storage**: Always miles internally. Display conversion via `Double.formattedDistance(metric:)`. Unit preference via `@Environment(\.useMetricUnits)`.
 - **Week start**: Monthly calendar grids are always Sunday-first — standard `Calendar.current` week (see `Date+Week.swift`). The user's `AppConfiguration.weekStartDay` (1=Sun…7=Sat, injected via `@Environment(\.weekStartDay)`) governs (a) weekly *aggregation* (mileage buckets, "This Week" stats — threaded into `WorkoutAggregations` as `firstWeekday`) and (b) the Aerobic Training *weekly* calendar: its day ordering, week boundaries, navigation, and header mileage totals use the `firstWeekday:` variants (`daysInWeek(firstWeekday:)`, `startOfWeek(firstWeekday:)`, `endOfWeek(firstWeekday:)`) so the topmost swimlane is the configured week start. The no-arg Sunday-first helpers remain for monthly views and must not change.
 - **CloudKit**: All model properties must have default values for CloudKit compatibility.
@@ -73,6 +73,7 @@ The AI coach has a full contributor guide in `docs/AI_COACH.md` — keep it in s
 - `ModelContainerFactory.makePreviewContainer()` for test and preview contexts
 - Cached `DateFormatter` instances (static lets) — never allocate in computed properties
 - **The strength board never changes the selected day in response to a move.** Dragging a card onto a day chip and the card's "Move to Day" context menu both leave `selectedDay` alone; the chip counts are the feedback. Don't "helpfully" follow the exercise.
+- **Favorites pre-fill, they never record.** A `FavoriteWorkout` fills only name, type, targets and counts-toward-mileage; date, notes, ratings and recurrence stay as the athlete set them. Every favorite ↔ form conversion goes through `FavoriteFormValues` and every mutation through `FavoriteWorkoutEditor`. Sheets receive `favorites` as a `let` from `HomeView`/`AerobicTrainingView` — they never query.
 - **Plan editing goes through `StrengthPlanFields`/`StrengthPlanDraft`.** Any surface that sets `plannedSets`/`plannedReps` (add-from-library today) reuses that section so the add and edit flows can't drift apart.
 - **Sheets sync `syncNow()` vs `performSync()` must stay split.** The debounce `Task` calls `performSync()` directly. Calling `syncNow()` from inside the debounce task would `.cancel()` the task on itself, propagating cancellation to the in-flight `URLSession` and surfacing as `CancellationError("cancelled")`. `StubGoogleSheetsAPI.overwriteSheet` calls `Task.checkCancellation()` to catch regressions of this pattern.
 
@@ -135,6 +136,10 @@ Views/
 - `Views/History/CalendarDayDot.swift` — resolves a calendar day's dot to none/solid/hollow from its items' `countsTowardTraining` (unit-tested)
 - `Views/History/WorkoutDetailSheet.swift` — edit + delete popup for a recorded workout; contains the `WorkoutEditor` helper enum that owns the mutation path (unit-tested)
 - `Views/History/WorkoutListView.swift` — discrete 10-per-page pagination, tappable rows, calendar-driven navigation/highlight, `WorkoutListPagination` helper for testable page math
+- `Models/FavoriteWorkout.swift` — saved aerobic preset (`@Model`), plus `targetSummary(metric:)`
+- `Services/Favorites/FavoriteWorkoutEditor.swift` — `FavoriteFormValues` (stored ↔ form units, planned-first Save-as seed) and `FavoriteWorkoutEditor` (make/update/delete/reorder) (unit-tested)
+- `Views/Home/FavoritesSection.swift` / `ManageFavoritesSheet.swift` / `FavoriteWorkoutFormSheet.swift` — Home favorites card, manager, and create/edit form
+- `Views/Shared/FavoriteMenuSection.swift` — "Start from Favorite" menu shared by `RecordWorkoutSheet` and `AddExerciseSheet`
 - `Views/Strength/StrengthBoardPlanner.swift` — pure lane/order mutations for the weekly kanban board (unit-tested)
 - `Views/Strength/StrengthPlanFields.swift` — `StrengthPlanDraft` (plan form state + `apply(to:)`) and the shared sets × reps form section used by both the add-from-library and edit-plan flows
 - `Views/Strength/ExerciseLibrarySheet.swift` — library browser: muscle-group filter chips + search + sectioned list, plus the `ExerciseLibraryFilter` helper enum owning the filter/grouping math (unit-tested)

@@ -74,18 +74,22 @@ extension ScenarioLibrary {
     /// Feeling and RPE are independent; one must never be derived from the
     /// other. A hard session the athlete felt strong in is the case that
     /// catches an inversion.
+    ///
+    /// An interval session, because the snapshot plans no intervals: naming a
+    /// planned session (tomorrow's tempo run) baits the model into copying the
+    /// plan's date and targets, which is a different failure from this one.
     public static let recordSeparateRatings = EvalScenario(
         id: "record-separate-ratings",
         title: "Keep feeling and RPE independent",
-        summary: "RPE 8 but felt strong: expect perceivedExertion 8 and feeling 4, " +
-            "neither inferred from the other. 10k is 6.2 miles.",
+        summary: "RPE 8 but felt strong: expect perceivedExertion 8 and feeling 4 " +
+            "(\"strong\"), neither inferred from the other. 10k is 6.2 miles.",
         tags: ["record", "invariant"],
         snapshot: Fixtures.typicalWeek,
-        athleteMessage: "Log today's tempo run: 10k in 48 minutes. RPE 8, but I felt strong.",
+        athleteMessage: "Log today's interval session: 10k in 48 minutes. RPE 8, but I felt strong.",
         expectations: [
             .proposes(.recordWorkout),
             .workoutOn(day: 0),
-            .workoutType(.tempoRun),
+            .workoutType(.intervalRun),
             .workoutDistance(miles: 6.21, tolerance: 0.1),
             .workoutDuration(seconds: 48 * 60),
             .workoutExertion(8),

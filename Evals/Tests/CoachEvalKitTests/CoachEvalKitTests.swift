@@ -123,17 +123,22 @@ struct EvalScenarioTests {
         let request = s.chatRequest()
         #expect(request.messages.map(\.text) == ["first", "reply", "second"])
         #expect(request.messages.last?.role == .user)
-        #expect(request.context != nil)
     }
 
-    @Test func snapshotLandsInTheFirstUserTurnOnly() {
-        let turns = AICoachPromptBuilder.buildChatTurns(
-            for: ScenarioLibrary.recordAfterDetails.chatRequest(), today: EvalCalendar.today
-        )
-        let userTurns = turns.filter { $0.role == .user }
-        #expect(userTurns.count == 2)
-        #expect(userTurns[0].text.count > userTurns[1].text.count)
-        #expect(userTurns[1].text == ScenarioLibrary.recordAfterDetails.athleteMessage)
+    @Test func firstRequestCarriesTheSnapshot() {
+        let request = ScenarioLibrary.recordYesterday.chatRequest()
+        #expect(request.context != nil)
+        let turns = AICoachPromptBuilder.buildChatTurns(for: request, today: EvalCalendar.today)
+        #expect(turns[1].text.contains("Recent training"))
+    }
+
+    @Test func laterRequestsCarryNoSnapshotJustLikeTheApp() {
+        // CoachChatStore sends context only on the first request and stores
+        // plain athlete text, so turn two's prompt has no training data.
+        let request = ScenarioLibrary.recordAfterDetails.chatRequest()
+        #expect(request.context == nil)
+        let turns = AICoachPromptBuilder.buildChatTurns(for: request, today: EvalCalendar.today)
+        #expect(!turns.contains { $0.text.contains("Recent training") })
     }
 }
 
@@ -481,6 +486,21 @@ struct ScenarioLibraryTests {
         #expect(ScenarioLibrary.tags.contains("invariant"))
     }
 
+    @Test func addingASecondNewLiftFailsStrengthAddOne() {
+        let day = StrengthDayProposal(
+            weekdayIndex: 5,
+            exercises: [
+                PlannedStrengthExercise(name: "Face Pull", muscleGroup: .shoulders, plannedSets: 3, plannedReps: 15),
+                PlannedStrengthExercise(name: "Shrug", muscleGroup: .back, plannedSets: 3, plannedReps: 12),
+            ],
+            rationale: ""
+        )
+        let result = EvalRunner.grade(
+            TurnTranscript.folding([.action(.planStrengthDay(day))]), for: ScenarioLibrary.strengthAddOne
+        )
+        #expect(!result.passed)
+    }
+
     @Test func perfectAnswersPassTheirOwnScenarios() {
         // Guards the scenarios themselves: a hand-written ideal answer must
         // score 100%, or the expectation (not the model) is wrong.
@@ -490,6 +510,15 @@ struct ScenarioLibraryTests {
             "strength-move": [.action(.updateStrengthExercise(StrengthExerciseUpdateProposal(
                 weekdayIndex: 1, exerciseName: "Romanian Deadlift", kind: .moveToDay,
                 newWeekdayIndex: 4, rationale: "as asked"
+            )))],
+            "strength-add-one": [.action(.planStrengthDay(StrengthDayProposal(
+                weekdayIndex: 5,
+                exercises: [
+                    // Re-listing an existing lift is fine: the applier skips it.
+                    PlannedStrengthExercise(name: "Pull-Up", muscleGroup: .back, plannedSets: 4, plannedReps: 8),
+                    PlannedStrengthExercise(name: "Face Pull", muscleGroup: .shoulders, plannedSets: 3, plannedReps: 15),
+                ],
+                rationale: "as asked"
             )))],
             "schedule-shorten-tomorrow": [.action(.suggestScheduleChange(ScheduleChangeProposal(
                 date: EvalCalendar.day(1), kind: .adjustDistance, distanceMiles: 4, rationale: "legs are toast"

@@ -36,20 +36,33 @@ extension ScenarioLibrary {
     )
 
     /// One exercise is also a `plan_strength_day` call — it appends.
+    ///
+    /// Graded on what reaches the board: the app's applier skips any name
+    /// already in the lane's active section, so re-listing Friday's existing
+    /// lifts alongside the new one is harmless. What matters is that exactly
+    /// one *new* exercise lands, and that it is face pulls at 3 x 15.
     public static let strengthAddOne = EvalScenario(
         id: "strength-add-one",
         title: "Add a single exercise",
-        summary: "Expect plan_strength_day on Friday carrying exactly one " +
-            "exercise named like \"face pull\", 3 x 15.",
+        summary: "Expect plan_strength_day on Friday whose only exercise not " +
+            "already on Friday's board is face pulls, 3 x 15.",
         tags: ["strength", "plan"],
         snapshot: Fixtures.typicalWeek,
         athleteMessage: "Add face pulls to Friday, 3 sets of 15.",
         expectations: [
             .proposes(.planStrengthDay),
             .strengthDayOn("Friday"),
-            .strengthDayExerciseCount(1...1),
-            .strengthDay("face pulls 3x15") { day in
-                guard let lift = day.exercises.first else { return .fail("no exercises") }
+            .strengthDay("adds only face pulls 3x15") { day in
+                let onBoard = Set(
+                    Fixtures.typicalWeek.strengthExercises
+                        .filter { $0.weekdayIndex == day.weekdayIndex && !$0.isOffloaded }
+                        .map { $0.name.lowercased() }
+                )
+                let added = day.exercises.filter { !onBoard.contains($0.name.lowercased()) }
+                let names = added.map(\.name).joined(separator: ", ")
+                guard added.count == 1, let lift = added.first else {
+                    return .fail("\(added.count) new: \(names)")
+                }
                 let named = lift.name.lowercased().contains("face pull")
                 let planned = lift.plannedSets == 3 && lift.plannedReps == 15
                 return .check(named && planned, "\(lift.name) \(lift.plannedSets.map(String.init) ?? "-")x\(lift.plannedReps.map(String.init) ?? "-")")

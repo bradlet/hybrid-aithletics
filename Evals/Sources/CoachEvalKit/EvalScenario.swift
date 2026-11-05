@@ -26,7 +26,8 @@ public struct EvalScenario: Sendable {
     public let tags: Set<String>
     /// The date the model is told it is.
     public let today: Date
-    /// The training snapshot the app would attach, or `nil` for none.
+    /// The training snapshot the app would attach to the first request, or
+    /// `nil` for none. See `chatRequest()` for when it is actually sent.
     public let snapshot: CoachingRequest?
     /// Scripted earlier turns, oldest first (`.user` / `.coach` only).
     public let history: [CoachMessage]
@@ -60,13 +61,16 @@ public struct EvalScenario: Sendable {
 
     /// The request the app would send for this turn.
     ///
-    /// The snapshot rides as `context`, which the prompt builder embeds in the
-    /// *first* user turn — where the app put it when the conversation began —
-    /// however many turns of `history` follow.
+    /// Mirrors `CoachChatStore.send`: the snapshot rides as `context` only on
+    /// the conversation's **first** request. The store keeps the athlete's
+    /// plain text in its transcript, so a later request carries no snapshot at
+    /// all — the model sees the training data only while answering the first
+    /// message. A scenario with `history` therefore runs without it, exactly
+    /// as the app would.
     public func chatRequest() -> CoachChatRequest {
         CoachChatRequest(
             messages: history + [CoachMessage(role: .user, text: athleteMessage)],
-            context: snapshot
+            context: history.isEmpty ? snapshot : nil
         )
     }
 }

@@ -22,6 +22,9 @@ enum UITestFixtures {
     /// for the Home tab's "which lift?" picker to appear.
     static let todayStrengthCount = 2
 
+    /// Name of the seeded favorite workout (Tempo Run, 4 mi, 32:00).
+    static let favoriteName = "Test Favorite Run"
+
     /// Clears any existing exercises in the context and inserts fresh
     /// fixtures. The most recent recorded exercise is "Test Workout 1" (today)
     /// and the oldest is "Test Workout 25" (24 days ago); two additional
@@ -115,8 +118,25 @@ enum UITestFixtures {
         context.insert(concreteExercise)
 
         seedStrength(into: context)
+        seedFavorites(into: context)
 
         try? context.save()
+    }
+
+    /// Replaces any favorites with a single known one, so the Home chip and
+    /// the in-sheet "Start from Favorite" menu have something to pick.
+    private static func seedFavorites(into context: ModelContext) {
+        if let existing = try? context.fetch(FetchDescriptor<FavoriteWorkout>()) {
+            for favorite in existing {
+                context.delete(favorite)
+            }
+        }
+        context.insert(FavoriteWorkout(
+            name: favoriteName,
+            type: .tempoRun,
+            distanceMiles: 4.0,
+            durationSeconds: 32 * 60
+        ))
     }
 
     /// Seeds the strength board: `todayStrengthCount` exercises in today's

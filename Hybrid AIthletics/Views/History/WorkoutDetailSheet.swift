@@ -40,6 +40,8 @@ struct WorkoutDetailSheet: View {
     @State private var perceivedExertion: Int?
     @State private var countsTowardMileage: Bool
     @State private var showDeleteConfirmation = false
+    /// Whether the new-favorite form seeded from this workout is showing.
+    @State private var isSavingFavorite = false
     /// Tracks whether the distance fields have been converted from their raw
     /// (miles) seed values into the user's display unit. `@Environment` is
     /// not available during `init`, so the conversion runs once in `.onAppear`.
@@ -106,6 +108,7 @@ struct WorkoutDetailSheet: View {
                         completedDistance: distance
                     )
                 }
+                saveAsFavoriteSection
                 deleteSection
             }
             .navigationTitle("Edit Workout")
@@ -121,6 +124,9 @@ struct WorkoutDetailSheet: View {
                 }
             }
             .onAppear { convertDistanceForDisplayIfNeeded() }
+            .sheet(isPresented: $isSavingFavorite) {
+                FavoriteWorkoutFormSheet(favorite: nil, initialValues: favoriteSeed)
+            }
             .alert(
                 "Delete \(exercise.name)?",
                 isPresented: $showDeleteConfirmation
@@ -140,6 +146,34 @@ struct WorkoutDetailSheet: View {
     }
 
     // MARK: - Sections
+
+    private var saveAsFavoriteSection: some View {
+        Section {
+            Button {
+                isSavingFavorite = true
+            } label: {
+                Label("Save as Favorite", systemImage: "star")
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
+            .accessibilityIdentifier("workoutDetail.saveAsFavorite")
+        }
+    }
+
+    /// The favorite this workout seeds, from the form as it stands: planned
+    /// targets first, the recorded actuals filling any unset target.
+    private var favoriteSeed: FavoriteFormValues {
+        FavoriteFormValues.plannedFirst(
+            name: name,
+            type: type,
+            plannedDurationSeconds: FavoriteFormValues.durationSeconds(
+                hours: plannedHours, minutes: plannedMinutes, seconds: plannedSeconds
+            ),
+            plannedDisplayDistance: plannedDistance,
+            actualDurationSeconds: FavoriteFormValues.durationSeconds(hours: hours, minutes: minutes, seconds: seconds),
+            actualDisplayDistance: distance,
+            countsTowardMileage: countsTowardMileage
+        )
+    }
 
     private var deleteSection: some View {
         Section {

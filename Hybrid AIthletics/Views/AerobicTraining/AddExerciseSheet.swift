@@ -42,6 +42,8 @@ struct AddExerciseSheet: View {
 
     /// Whether the series-scope save dialog is showing (edit mode, series member).
     @State private var showSeriesSaveDialog = false
+    /// Whether the new-favorite form seeded from this plan is showing (edit mode).
+    @State private var isSavingFavorite = false
 
     init(exercise: Exercise?, defaultDate: Date, favorites: [FavoriteWorkout] = []) {
         self.exercise = exercise
@@ -72,6 +74,9 @@ struct AddExerciseSheet: View {
                     recurrenceSection
                 }
                 notesSection
+                if exercise != nil {
+                    saveAsFavoriteSection
+                }
             }
             .navigationTitle(exercise == nil ? "Schedule Exercise" : "Edit Exercise")
             .navigationBarTitleDisplayMode(.inline)
@@ -105,10 +110,35 @@ struct AddExerciseSheet: View {
                     name = newType.rawValue
                 }
             }
+            .sheet(isPresented: $isSavingFavorite) {
+                FavoriteWorkoutFormSheet(
+                    favorite: nil,
+                    initialValues: FavoriteFormValues(
+                        name: name,
+                        type: type,
+                        durationSeconds: enteredDurationSeconds,
+                        displayDistance: distance,
+                        countsTowardMileage: countsTowardMileage
+                    )
+                )
+            }
         }
     }
 
     // MARK: - Form Sections
+
+    /// Saves the plan as it stands in the form as a new favorite (edit mode).
+    private var saveAsFavoriteSection: some View {
+        Section {
+            Button {
+                isSavingFavorite = true
+            } label: {
+                Label("Save as Favorite", systemImage: "star")
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
+            .accessibilityIdentifier("addExercise.saveAsFavorite")
+        }
+    }
 
     /// Exercise type picker and name field (type first, name secondary).
     private var nameAndTypeSection: some View {

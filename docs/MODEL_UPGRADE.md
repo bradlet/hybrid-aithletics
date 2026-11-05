@@ -1,44 +1,76 @@
-# Future Model Upgrade: Gemma 4 via LiteRT-LM
+# Changing the Coach Model or Runtime
 
 ## Current State
 
-The AI coach uses **Gemma 3 4B QAT 4-bit** (`mlx-community/gemma-3-4b-it-qat-4bit`) via MLX-Swift. The model is downloaded from Hugging Face on first use and cached locally. Generation parameters are centralized in `AICoachCore.GenerationConfig.production`.
+The AI coach runs **Gemma 4 E2B, instruction-tuned, MLX 4-bit**
+(`lmstudio-community/gemma-4-E2B-it-MLX-4bit`, ~4.3 GB) on **mlx-swift-lm 3.32.3**
+(mlx-swift 0.32.3), with swift-transformers 1.3.5 for Hugging Face access and tokenization.
+The weights download from Hugging Face when the athlete taps Download in the coach chat and are
+cached for offline use. Sampling parameters live in `AICoachCore.GenerationConfig`. The live chat
+uses the `.chat` preset.
 
-**Known issue:** The model produces poor output with mlx-swift 0.29.1 due to quantized inference bugs. Python MLX 0.31.1 produces excellent output from the same model and prompt. Updating `mlx-swift-examples` to a version that depends on mlx-swift 0.31.x+ should fix this. Verify with `cd Evals && python3 eval_runner.py` after updating.
+History:
 
-## Why Gemma 4 Was Deferred
+| Date | Change |
+|---|---|
+| 2026-04-06 | Gemma 4 E2B chosen ([ADR 1](adrs/1-use-lightweight-onboard-llm.md)) but couldn't load on MLXLLM 2.29.1 |
+| 2026-04-08 | Fell back to Gemma 3 4B QAT (`mlx-community/gemma-3-4b-it-qat-4bit`) |
+| 2026-10-14 | mlx-swift-lm 3.32.3 added native `gemma4`; switched to Gemma 4 E2B and to tool calling |
 
-As of April 2026, Gemma 4 cannot run on iOS:
+The Gemma 4 migration this document used to describe is **done**. What follows is the checklist for
+the *next* model or runtime change. See [AI_COACH.md](AI_COACH.md) for how the coach works.
 
-- **MLX-Swift:** `"gemma4"` is not in MLXLLM's built-in type registry (v2.29.1). Registering it under the Gemma 3 architecture causes parameter shape mismatches at runtime. Open issue: [ml-explore/mlx-swift-examples#467](https://github.com/ml-explore/mlx-swift-examples/issues/467).
-- **LiteRT-LM:** Google's official edge inference framework supports Gemma 4, but the Swift SDK is marked "In Dev / Coming Soon" with no ETA. Only Kotlin, Python, and C++ are production-ready.
+```mermaid
+flowchart TD
+    A{"What is changing?"} -->|"Different weights,<br/>same runtime"| B["Option A:<br/>swap the model"]
+    A -->|"Different inference<br/>runtime"| C["Option B:<br/>new AICoachService"]
+    B --> D["Verify on a physical device"]
+    C --> D
+```
 
-## When to Revisit
+## Option A: Swap the model (same runtime)
 
-Check these periodically:
+1. **Pick a loadable repo.** It must be an MLX conversion that mlx-swift-lm can load: an
+   `LLMTypeRegistry` model type, `.scales`/`.biases` tensors, and a `group_size` in its
+   quantization config. Google QAT exports such as `mlx-community/gemma-4-E2B-it-qat-mobile` fail on
+   the missing `group_size`.
+2. **Update `MLXAICoachService`** (`Services/AICoach/MLXAICoachService.swift`):
+   - `modelID`
+   - `approximateDownloadBytes`: the CTA shows this before any network call, so keep it in step with `modelID`
+   - `ModelConfiguration.toolCallFormat` and `extraEOSTokens` for the model family
+     (Gemma 4: `.gemma4` + `<turn|>`; Gemma 3: `.gemma` + `<end_of_turn>`)
+3. **Re-check the tool-argument dialect.** Gemma 4's `<|"|>` string escape is the reason every tool
+   argument is scalar (see `CLAUDE.md` and [AI_COACH.md §9](AI_COACH.md#9-tools)). A different
+   family may parse nested values. Don't loosen the schemas without testing on a device.
+4. **Re-check memory.** Compare weight size with the current 4.3 GB and test the smallest supported
+   device for jetsam. `MLX.Memory.cacheLimit` stays at 20 MB.
+5. **Re-tune `GenerationConfig`** if output degrades (repetition, rambling, tool-call spam).
+6. **Update the evals' model:** `MODEL_ID` in `Evals/eval_runner.py` and `CoachGenerator.modelID` in
+   `Evals/Sources/CoachEval/Generation/CoachGenerator.swift` (both still Gemma 3 4B today).
+7. **Update docs:** `CLAUDE.md`, `README.md`, `docs/AI_COACH.md`, `docs/ARCHITECTURE.md`, and ADR 1 (add an amendment).
+8. **Verify on a physical device** with an Xcode build. The simulator takes the `#else
+   notImplemented` path, and SPM command-line builds can't run Metal inference.
+
+## Option B: Swap the runtime (e.g. LiteRT-LM)
+
+Google's LiteRT-LM Swift SDK was "In Dev / Coming Soon" when ADR 1 was written. If it, or another
+runtime, becomes the better choice:
+
+1. Add the package via SPM, gated behind `#if canImport(...)` like MLX.
+2. Implement a new `AICoachService` conformance that:
+   - builds turns with `AICoachPromptBuilder.buildChatTurns(for:today:)` and tools with `CoachToolSchemas.all(today:)`
+   - yields `CoachEvent`s (`.textChunk`, `.action`, `.rejectedToolCall`)
+   - decodes every tool call through `CoachToolDecoder`
+   - supports `isModelCached`, `isModelReady`, `loadModel()`, `onDownloadProgress`, and `approximateDownloadBytes`, so the opt-in download flow keeps working
+3. Inject it in `Hybrid_AIthleticsApp.makeCoachForLaunch()`.
+4. Remove the MLX dependencies if nothing else uses them.
+
+The `AICoachService` / `CoachEvent` boundary exists so that no view, store, or test code has to change.
+
+## Where to watch
 
 | Source | What to look for |
-|--------|-----------------|
-| [ml-explore/mlx-swift-examples releases](https://github.com/ml-explore/mlx-swift-examples/releases) | `"gemma4"` added to `LLMTypeRegistry` |
-| [Google AI Edge LiteRT-LM](https://github.com/nicholasgasior/litertlm-swift) | Swift SDK reaches stable release |
-| [google-ai-edge/LiteRT](https://github.com/google-ai-edge/LiteRT) | Official Swift/iOS samples published |
-
-## Migration Steps (when ready)
-
-### Option A: MLX-Swift adds Gemma 4 support
-
-1. Update the mlx-swift-examples SPM dependency to the version that includes `"gemma4"`.
-2. In `MLXAICoachService.swift`, change `modelID` to the Gemma 4 E2B MLX quant repo (e.g. `"mlx-community/gemma-4-e2b-it-4bit"`).
-3. Update documentation references from Gemma 3 to Gemma 4.
-4. Verify with eval suite: `cd Evals && python3 eval_runner.py` — all scenarios should score >= 80/100.
-5. Test on a physical device — verify generation quality and performance.
-
-### Option B: LiteRT-LM Swift SDK ships
-
-1. Add the LiteRT-LM Swift package via SPM.
-2. Create a new `LiteRTAICoachService` implementing `AICoachService`.
-3. Use the `.litertlm` model format (download or bundle as appropriate).
-4. Swap the service injection in `Hybrid_AIthleticsApp.swift`.
-5. Optionally remove the mlx-swift-examples dependency if no longer needed.
-
-The `AICoachService` protocol boundary was designed to make runtime swaps cheap — no view or test code needs to change.
+|---|---|
+| [ml-explore/mlx-swift-lm releases](https://github.com/ml-explore/mlx-swift-lm/releases) | New model types, tool-call parser changes (especially nested-argument handling for Gemma) |
+| [google-ai-edge/LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM) | A stable Swift SDK |
+| Hugging Face `mlx-community` / `lmstudio-community` | Smaller MLX-loadable Gemma 4 builds |

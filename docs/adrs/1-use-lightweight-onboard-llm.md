@@ -4,6 +4,7 @@
 
 Accepted — 2026-04-06
 **Amended — 2026-04-08:** Switched from Gemma 4 E2B (bundled) to Gemma 3 4B QAT (runtime download). See [Amendment](#amendment--2026-04-08) below.
+**Amended — 2026-10-14:** Switched back to Gemma 4 E2B (runtime download, explicit opt-in) on mlx-swift-lm 3.x, and the coach became a tool-calling conversation. See [Amendment](#amendment--2026-10-14) below. **The Decision table below reflects the 2026-04-08 state; the 2026-10-14 amendment supersedes it where they differ.**
 
 ## Context
 
@@ -106,9 +107,31 @@ It is the same relationship as an `.mp4` video file and a video decoder: you can
 
 Switching to runtime download via MLXLLM's built-in `ModelConfiguration(id:)` also eliminates the manual weight-download and Xcode folder-reference setup that was previously required, significantly simplifying the developer experience and build process.
 
+## Amendment — 2026-10-14
+
+**Changed:**
+
+| Dimension | Now |
+|---|---|
+| **Model** | Google Gemma 4 E2B, instruction-tuned, MLX 4-bit (`lmstudio-community/gemma-4-E2B-it-MLX-4bit`, ~4.3 GB) |
+| **Runtime** | mlx-swift-lm 3.32.3 (`MLXLLM` / `MLXLMCommon`) on mlx-swift 0.32.3; swift-transformers 1.3.5 for Hub access and tokenization |
+| **Delivery** | Downloaded from Hugging Face **only when the athlete taps Download** in the coach chat, with byte-weighted progress; cached for offline use. mlx-swift-lm 3.x dropped its bundled Hub integration, so the app supplies its own `Downloader` / `TokenizerLoader` (`Services/AICoach/MLXModelLoading.swift`) |
+| **Interaction** | Multi-turn chat with tool calling (`chat`, `suggest_schedule_change`, `record_workout`, `plan_strength_day`, `update_strength_exercise`). Mutating tools produce proposals the athlete must accept; nothing is written unattended |
+
+**Why:** Gemma 4 E2B was the original choice (see the Decision and the 2026-04-08 amendment), deferred only because MLXLLM 2.x could not load it. mlx-swift-lm 3.x removed that blocker: it ships a native `gemma4` model type, which reads the multimodal checkpoint's `text_config` and drops the vision weights so the model loads text-only. It also added the tool-handling work the tool-calling coach needed (a Gemma 4 tool-call format, schema-typed parameter conversion, and rejected tool calls surfaced as generation events). The smaller `gemma-4-E2B-it-qat-mobile` export (2.40 GB) can't be loaded by mlx-swift-lm (Google QAT format, no `.scales`/`.biases`, no `group_size`), and every other Gemma 4 MLX build is 5.4 GB or larger, so the 4.3 GB MLX 4-bit build was chosen.
+
+**Consequences, beyond those above:**
+
+- The download is roughly twice the size originally estimated (~4.3 GB, not ~2 GB). That is why it became an explicit opt-in with real progress and a transfer-rate readout instead of starting implicitly on first use.
+- Peak memory is higher than with Gemma 3 4B QAT (3.0 GB). The app caps MLX's GPU buffer cache at 20 MB and carries the `increased-memory-limit` entitlement; watch for jetsam on non-Pro devices.
+- The "no agentic/tool-use behavior in V1" mitigation no longer applies. It is replaced by propose-and-confirm: every mutating tool call is validated by a pure decoder that rejects rather than clamps, and is shown to the athlete for approval. The structured-suggestion item under *Future work* has shipped.
+- `Evals/` still pins Gemma 3 4B and scores only the one-shot prompt, so eval scores don't reflect the production model.
+
+See [docs/AI_COACH.md](../AI_COACH.md) for the current architecture.
+
 ## Future work
 
-- **Structured suggestion output.** V1 returns free-form narrative text. A V2 could parse suggestions into concrete edits (e.g. "change Monday's 10-mile long run to 8 miles easy") and offer one-tap apply.
+- ~~**Structured suggestion output.**~~ Shipped (2026-10-14) as tool calling with Accept/Dismiss proposal cards.
 - **Free-tier AI features.** Surface a lightweight coach summary ("this week in review") to free users, reinforcing the "Hybrid AIthletics" branding without gating the download.
-- **Upgrade to Gemma 4 via LiteRT-LM.** When Google ships a production-ready Swift API for LiteRT-LM, evaluate upgrading to Gemma 4 E2B for better reasoning. The `AICoachService` protocol boundary makes this swap cheap. See `docs/MODEL_UPGRADE.md`.
+- ~~**Upgrade to Gemma 4.**~~ Shipped (2026-10-14) via mlx-swift-lm rather than LiteRT-LM. A future runtime swap (e.g. LiteRT-LM once its Swift SDK is stable) stays cheap behind the `AICoachService` protocol. See `docs/MODEL_UPGRADE.md`.
 - **Fine-tuning.** Explore LoRA adapters or small fine-tuning on a corpus of running-coach dialogue to improve domain fit without materially increasing model size.

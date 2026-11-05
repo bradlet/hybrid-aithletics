@@ -7110,3 +7110,61 @@ struct StubCoachSpeechServiceTests {
         #expect(speech.errorMessage == "denied")
     }
 }
+
+// MARK: - FavoriteWorkout Tests
+
+struct FavoriteWorkoutTests {
+
+    @Test func defaultValues() {
+        let favorite = FavoriteWorkout(name: "Easy Loop")
+        #expect(favorite.name == "Easy Loop")
+        #expect(favorite.type == .run)
+        #expect(favorite.distanceMiles == 0)
+        #expect(favorite.durationSeconds == 0)
+        #expect(favorite.countsTowardMileage)
+        #expect(favorite.sortOrder == 0)
+    }
+
+    @Test func generatedIDsAreUnique() {
+        #expect(FavoriteWorkout(name: "A").id != FavoriteWorkout(name: "A").id)
+    }
+
+    @Test func explicitInitPreservesValues() {
+        let favorite = FavoriteWorkout(
+            name: "Trail Hike",
+            type: .hike,
+            distanceMiles: 6.5,
+            durationSeconds: 7200,
+            countsTowardMileage: false,
+            sortOrder: 3
+        )
+        #expect(favorite.name == "Trail Hike")
+        #expect(favorite.type == .hike)
+        #expect(favorite.distanceMiles == 6.5)
+        #expect(favorite.durationSeconds == 7200)
+        #expect(!favorite.countsTowardMileage)
+        #expect(favorite.sortOrder == 3)
+    }
+
+    @Test func persistsInModelContainer() throws {
+        let container = ModelContainerFactory.makePreviewContainer()
+        let context = ModelContext(container)
+        context.insert(FavoriteWorkout(
+            name: "Tempo Tuesday",
+            type: .tempoRun,
+            distanceMiles: 5,
+            durationSeconds: 2400,
+            countsTowardMileage: true,
+            sortOrder: 1
+        ))
+        try context.save()
+
+        let fetched = try context.fetch(FetchDescriptor<FavoriteWorkout>())
+        #expect(fetched.count == 1)
+        #expect(fetched.first?.name == "Tempo Tuesday")
+        #expect(fetched.first?.type == .tempoRun)
+        #expect(fetched.first?.distanceMiles == 5)
+        #expect(fetched.first?.durationSeconds == 2400)
+        #expect(fetched.first?.sortOrder == 1)
+    }
+}

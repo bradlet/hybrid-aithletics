@@ -12,12 +12,13 @@ import AICoachCore
 extension ScenarioLibrary {
 
     /// Everything needed is in one message; "yesterday" must resolve against
-    /// the date in the system turn, not an example date.
+    /// the date in the system turn, not an example date. No rating is given,
+    /// so none may appear ("never invent a rating the athlete did not give").
     public static let recordYesterday = EvalScenario(
         id: "record-yesterday",
         title: "Record a fully described workout",
-        summary: "Date, type, distance, and duration are all given. Expect one " +
-            "record_workout proposal dated yesterday with the stated values.",
+        summary: "Date, type, distance, and duration are all given; no ratings. " +
+            "Expect one record_workout dated yesterday with the stated values and no invented RPE or feeling.",
         tags: ["record", "dates"],
         snapshot: Fixtures.typicalWeek,
         athleteMessage: "I ran an easy 5 miles yesterday in 42 minutes.",
@@ -27,6 +28,8 @@ extension ScenarioLibrary {
             .workoutType(.easyRun),
             .workoutDistance(miles: 5),
             .workoutDuration(seconds: 42 * 60),
+            .workoutExertion(nil),
+            .workoutFeeling(nil),
             .noRejections,
         ]
     )

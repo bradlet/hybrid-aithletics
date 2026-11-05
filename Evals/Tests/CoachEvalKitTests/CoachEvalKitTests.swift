@@ -505,7 +505,9 @@ struct ScenarioLibraryTests {
         // Guards the scenarios themselves: a hand-written ideal answer must
         // score 100%, or the expectation (not the model) is wrong.
         let ideal: [String: [CoachEvent]] = [
-            "record-yesterday": [.action(.recordWorkout(yesterdayRun))],
+            "record-yesterday": [.action(.recordWorkout(WorkoutProposal(
+                date: EvalCalendar.day(-1), exerciseType: .easyRun, distanceMiles: 5, durationSeconds: 2520
+            )))],
             "record-ask-first": [.action(.reply("Happy to! What did you do, and when?"))],
             "strength-move": [.action(.updateStrengthExercise(StrengthExerciseUpdateProposal(
                 weekdayIndex: 1, exerciseName: "Romanian Deadlift", kind: .moveToDay,

@@ -12,8 +12,10 @@ Evals/                     AI coach eval CLI (Swift inspect + Python eval runner
 Models/                    @Model classes, enums (data layer)
 Config/                    ModelContainer setup, environment keys (infrastructure)
 Extensions/                Date arithmetic, formatting (utilities)
-Services/                  Protocol-based service layer (AI coach)
-Views/                     SwiftUI views grouped by tab (presentation)
+Services/                  Protocol-based services (AI coach, exercise planner, exercise library,
+                           Google Sheets sync, HealthKit import, CSV)
+Views/                     SwiftUI views grouped by tab: Home, AerobicTraining, Strength, History,
+                           Settings, plus Shared building blocks (presentation)
 ```
 
 ## Data Models
@@ -25,9 +27,11 @@ The single persisted entity — a training activity that is planned, recorded, o
 - Planned target metrics (`durationSeconds`, `distanceMiles`, `notes`) live on the exercise; recorded actuals live in the nested `workout`
 - `workout: Workout?` — embedded recorded-instance data; `nil` = planned only, non-nil = recorded. `isCompleted` is `workout != nil`
 - `id: UUID` is explicit for drag-and-drop `Transferable` support and list/navigation identity
+- `seriesID: UUID?` — shared by exercises bulk-created as one recurring series (see [Recurring exercise series](#recurring-exercise-series)); `nil` for one-off sessions
+- `countsTowardMileage: Bool` — `false` opts the activity out of mileage/training aggregates; it renders as a hollow calendar dot and a dimmed "Not training" History row
 
 ### Workout
-The recorded-instance data for an `Exercise`. **Not** a `@Model` — a plain `Codable` value `struct` stored inline on `Exercise.workout` (no second table).
+The recorded-instance data for an `Exercise`. **Not** a `@Model` — a plain `Codable` value `struct` JSON-encoded into the exercise's private `workoutData: Data?` column and exposed as `Exercise.workout` (no second table; a `Workout?` composite attribute would crash SwiftData's decoder on fetch).
 
 - Holds the recorded **actuals**: `durationSeconds`, `distanceMiles`, `notes`, plus `feeling`, `perceivedExertion`, `source`, `externalID`
 - Has no date/name/type — those belong to the owning `Exercise`
@@ -38,73 +42,61 @@ The recorded-instance data for an `Exercise`. **Not** a `@Model` — a plain `Co
 ### AppConfiguration
 Singleton preferences stored in SwiftData for CloudKit sync.
 
-- `useMetricUnits: Bool` — controls distance display across the app
-- Accessed via `@Query` in `ContentView`, propagated as a SwiftUI `EnvironmentKey`
+- `useMetricUnits: Bool` — controls distance display across the app (`@Environment(\.useMetricUnits)`)
+- `weekStartDay: Int` — 1 = Sunday … 7 = Saturday; governs weekly aggregation and the Aerobic Training weekly calendar (`@Environment(\.weekStartDay)`)
+- `googleSheetsSyncEnabled` / `googleSheetsSpreadsheetID` — Google Sheets export state
+- Accessed via `@Query` in `ContentView` (and `SettingsView` for editing), propagated as SwiftUI `EnvironmentKey`s
 
 ### ExerciseType
-`String`-backed enum shared by Exercise and Workout. Provides `systemImage` and `color` computed properties for consistent UI rendering.
+`String`-backed enum used by `Exercise`. Provides `systemImage` and `color` computed properties for consistent UI rendering.
+
+### Strength models
+`StrengthExercise` (a card on the weekly strength board), `StrengthWorkout` (a recorded lift), and `UserLibraryExercise` (athlete-created library entries) are documented in [STRENGTH_TRAINING.md](STRENGTH_TRAINING.md).
 
 ## Key Design Decisions
 
 ### @Query placement
-Only top-level tab views (`AerobicTrainingView`, `HistoryView`) and `ContentView` own `@Query` properties. All child views receive data as plain `let` parameters. This minimizes SwiftData subscription overhead — each `@Query` causes its entire view subtree to re-evaluate on any change to the queried model type.
+Only top-level views own `@Query` properties: the tab roots (`HomeView`, `AerobicTrainingView`, `StrengthTrainingView`, `HistoryView`), `ContentView`, and `SettingsView`. All child views receive data as plain `let` parameters. This minimizes SwiftData subscription overhead — each `@Query` causes its entire view subtree to re-evaluate on any change to the queried model type.
 
-Both tabs use an **unfiltered** `@Query private var allExercises: [Exercise]` and derive what they need in computed vars: `HistoryView` filters to completed exercises (`workout != nil`) and sorts by `date` descending in memory; `AerobicTrainingView` filters by week. The completed/planned split is done in memory because a `#Predicate` cannot reach into the nested `workout` Codable composite attribute. This is cheap at single-user scale.
+The exercise-reading views use an **unfiltered** `@Query private var allExercises: [Exercise]` and derive what they need in computed vars: `HistoryView` filters to completed exercises (`workout != nil`) and sorts by `date` descending in memory; `AerobicTrainingView` filters by week. The completed/planned split is done in memory because a `#Predicate` cannot reach inside the JSON-encoded `workoutData` blob that backs `workout`. This is cheap at single-user scale.
 
 ### Distance storage
 All distances are stored in miles internally. Conversion to display units (km) happens at the view layer using `Double.formattedDistance(metric:)` and `Double.toDisplayDistance(metric:)`. The `useMetricUnits` flag is read from the environment.
 
 ### Week boundaries
-The app uses Monday as the first day of the week regardless of locale. A private `mondayCalendar` (with `firstWeekday = 2`) is used for all week boundary calculations in `Date+Week.swift`.
+All calendar arithmetic lives in `Date+Week.swift`. Two week conventions coexist:
+
+- **Monthly calendar grids are always Sunday-first** (the standard `Calendar.current` week), via the no-arg helpers.
+- **The user's `AppConfiguration.weekStartDay`** governs weekly *aggregation* (mileage buckets, "This Week" stats — passed into `WorkoutAggregations` as `firstWeekday`) and the Aerobic Training *weekly* calendar (day order, week boundaries, navigation, header totals) via the `firstWeekday:` variants (`daysInWeek(firstWeekday:)`, `startOfWeek(firstWeekday:)`, `endOfWeek(firstWeekday:)`).
 
 ### Drag-and-drop
-Exercises use a lightweight `ExerciseDragItem` (carrying only a UUID) as the `Transferable` payload. The custom UTType `com.hybridaithletics.exercise` is registered in Info.plist via `UTExportedTypeDeclarations`. The drop handler looks up the exercise by ID and mutates `scheduledDate`. Full model objects are never serialized for drag transfer.
+Exercises use a lightweight `ExerciseDragItem` (carrying only a UUID) as the `Transferable` payload. The custom UTType `com.hybridaithletics.exercise` is registered in Info.plist via `UTExportedTypeDeclarations`. The drop handler (`WeeklyCalendarView`) looks up the exercise by ID and sets its `date` to the target day. Full model objects are never serialized for drag transfer.
 
-### Repeating exercises
-Exercises can be marked as `isRepeating: Bool`. A repeating exercise serves as a template that appears virtually on its matching day-of-week for the current week and all future weeks.
+### Recurring exercise series
+Recurring plans are **eager bulk inserts of concrete `Exercise` rows** — there are no templates and no virtual instances.
 
-**Virtual display**: `AerobicTrainingView.weekExercises` includes repeating exercises from other weeks whose `date.mondayBasedWeekdayIndex` matches a day in the displayed week, provided no concrete instance (same name + type + day) already exists. Virtual exercises only appear for the current week forward — past weeks show only concrete data.
-
-**On-demand materialization**: When the user interacts with a virtual exercise (record, edit, or drag), `WeeklyCalendarView.materializeIfNeeded` creates a concrete copy with `isRepeating: false` for that specific day. The original template remains unchanged.
-
-**Day matching**: `WeeklyCalendarView.exercisesForDay` matches exercises by `date.isSameDay` (concrete) or `date.mondayBasedWeekdayIndex` (virtual repeating).
+- `ExerciseSeriesSpec` (Codable) describes the series: cadence, inclusive end date, and an every-N-occurrences progression.
+- `SeriesGenerator.occurrences(for:)` is a pure spec → dated occurrences expansion (monthly cadence anchored to the start date, capped at 400 occurrences).
+- `ExercisePlanner` is the bulk CRUD surface keyed on `seriesID`: `createSeries`, `members(of:scope:)`, `updateSeries`, `deleteSeries`, and `detach` (removes one exercise from its series so it can be edited or deleted on its own).
+- The AI coach's proposals target a single session, so `CoachProposalApplier` mutates that one exercise directly (calling `detach` before removing a series member) rather than going through the series API.
 
 ### CloudKit sync
 Configured via `ModelConfiguration(cloudKitDatabase: .automatic)` in `ModelContainerFactory`. All model properties have default values for CloudKit compatibility. The CloudKit container ID must be registered in the Apple Developer portal and match the entitlements file.
 
-### AICoachCore local package
-The `Packages/AICoachCore/` local Swift package is the single source of truth for all coaching logic shared between the iOS app and the eval CLI. It contains:
-- **`AICoachPromptBuilder`** — stateless prompt construction with `buildPrompt(for:)` (flat) and `buildUserContent(for:)` (user-only, for use with separate system role)
-- **Coaching types** — `CoachWorkout`, `CoachExercise`, `CoachingRequest`, `CoachingResponse` (plain structs, no SwiftData)
-- **`CoachExerciseType`** — mirrors the app's `ExerciseType` raw values without UI properties
-- **`GenerationConfig`** — all LLM generation parameters (temperature, topP, repetitionPenalty, etc.) with named presets
-- **Distance/duration formatters** — internal to the package, used by the prompt builder
+### AI coach
+The on-device, tool-calling AI coach (Gemma 4 E2B via MLX-Swift, reached from the Home tab) has its own contributor guide: **[AI_COACH.md](AI_COACH.md)**. In brief:
 
-The app's SwiftData models are converted to AICoachCore types via `CoachTypeConversions.swift` (`CoachWorkout(from:)`, `CoachExercise(from:)`).
-
-### AI Coach service layer
-The on-device coaching feature lives behind a protocol, `AICoachService`, so the rest of the app never imports MLX or any specific runtime directly.
-
-**Protocol and environment injection.** `Services/AICoach/AICoachService.swift` defines `suggestAdaptations(_:)` and `streamSuggestion(_:)`. The service is exposed via `@Environment(\.aiCoach)` (`Config/AICoachEnvironment.swift`). The default environment value is `StubAICoachService`, so SwiftUI previews and unit tests never accidentally load real model weights. The app root (`Hybrid_AIthleticsApp.swift`) replaces the default with an `MLXAICoachService` instance at launch.
-
-**Implementations.**
-- `StubAICoachService` — returns a deterministic canned response and streams it in small chunks with artificial delay. Used by previews and tests.
-- `MLXAICoachService` — production implementation backed by Gemma 4 E2B via MLX-Swift. The model is downloaded from Hugging Face on first use and cached locally. The actual MLX calls are gated behind `#if canImport(MLXLLM)` so the file compiles even before the SPM dependency is added, throwing `AICoachError.notImplemented` until the dependency is in place. Reads generation parameters from `GenerationConfig.production`. Uses `UserInput(chat:)` with separate system/user roles.
-
-**Prompt construction.** `AICoachPromptBuilder` lives in the `AICoachCore` package and turns a `CoachingRequest` into prompt text. It provides both `buildPrompt(for:)` (flat string) and `buildUserContent(for:)` (user content only, for use alongside `systemPreamble`). Note: Gemma 3's chat template folds system messages into the first user turn regardless, so both approaches produce identical tokenized prompts.
-
-**Request ownership.** The top-level `AerobicTrainingView` assembles the `CoachingRequest` from its own `@Query` data: recent "workouts" are completed exercises (`isCompleted`) in the last 4 weeks, and upcoming exercises are planned-only ones in the next 2 weeks. Conversion to AICoachCore types goes through `CoachWorkout(from: exercise)` (reads `exercise.date`/`type` + the recorded `workout` metrics) and `CoachExercise(from: exercise)`.
+- **`Packages/AICoachCore/`** is a pure-Swift local package (no MLX, no SwiftData) shared by the app and the `Evals/` CLI: coaching snapshot types, `AICoachPromptBuilder`, the tool vocabulary (`CoachTools`), JSON schemas (`CoachToolSchemas`), the validating `CoachToolDecoder`, and `GenerationConfig`.
+- **`Services/AICoach/`** holds the `AICoachService` protocol (`MLXAICoachService` in production, `StubAICoachService` for previews/tests, injected via `@Environment(\.aiCoach)` with the stub as default), the app-scope `CoachChatStore` (`@Environment(\.coachChat)`), the Hugging Face downloader, `CoachProposalApplier`, SwiftData ↔ core conversions, and speech-to-text.
+- **The coach proposes, never writes.** Every mutating tool call becomes an Accept/Dismiss card; `HomeView` applies accepted proposals.
+- **Model delivery:** the ~4.3 GB weights are not bundled. They download from Hugging Face only when the athlete taps Download in the chat, with byte-weighted progress, and are cached for offline use.
 
 ### Eval CLI
-The `Evals/` directory contains tools for iterating on the AI coach's prompt and generation parameters outside the iOS app:
-- **`swift run CoachEval inspect`** — prints the formatted prompt from AICoachCore without running the model
-- **`python3 eval_runner.py`** — runs prompts through Python MLX and scores output quality (100-point scale)
-- Shares prompt and config via the `AICoachCore` package, so changes propagate to both app and evals
+The `Evals/` directory contains tools for iterating on the AI coach's prompt outside the iOS app:
+- **`swift run CoachEval inspect --prompt-mode flat|chat|conversation`** — prints the prompt from AICoachCore without running a model (`conversation` shows the tool-calling chat turns and tool schemas the app sends)
+- **`python3 eval_runner.py`** — runs the one-shot prompt through Python MLX and scores output quality (100-point scale). It still pins Gemma 3 4B, so scores do not reflect the production model.
 
 See `Evals/README.md` for full documentation.
-
-### Model delivery
-The Gemma 4 E2B 4-bit model is **not bundled** in the app binary. Instead, `MLXAICoachService` uses `ModelConfiguration(id: "lmstudio-community/gemma-4-E2B-it-MLX-4bit")` to download the weights from Hugging Face on first use (~4.3 GB). MLXLLM caches the download in the app's caches directory for offline access on subsequent launches. This keeps the app binary small and eliminates the need for developers to manually download and configure model weights.
 
 ## Data Flow
 
@@ -127,11 +119,11 @@ Drag ExerciseCardView → ExerciseDragItem(UUID) transferred → Drop on target 
 exercise.date = targetDay → SwiftData auto-saves → @Query fires → UI re-renders
 ```
 
-### Interacting with a virtual repeating exercise
+### Creating a recurring series
 ```
-User taps record/edit on virtual exercise → materializeIfNeeded creates concrete copy →
-concrete Exercise inserted into modelContext → callback receives concrete instance →
-sheet opens with concrete exercise → @Query fires → UI shows new concrete + hides virtual
+AddExerciseSheet (repeat options) → ExerciseSeriesSpec → SeriesGenerator.occurrences(for:) →
+ExercisePlanner.createSeries inserts one concrete Exercise per occurrence, all sharing a seriesID →
+@Query fires → every occurrence appears on its own day
 ```
 
 ### Importing (CSV / Apple Health)
@@ -142,16 +134,18 @@ HealthKit dedups against existing workout.externalID (collected in memory) →
 @Query fires → imported activity appears in BOTH History and the training calendar
 ```
 
-### Requesting AI coaching suggestions
+### Talking to the AI coach
 ```
-User taps "Ask Coach" in AerobicTrainingView → buildCoachRequest() reads recent completed
-exercises (last 4 weeks) and upcoming planned exercises (next 2 weeks) from @Query →
-exercises converted to AICoachCore types (CoachWorkout, CoachExercise) →
-CoachingRequest assembled → AICoachSheet presented → on .task, calls
-coach.streamSuggestion(request) → AICoachPromptBuilder serializes request to prompt →
-MLXAICoachService builds UserInput(chat:) with system/user roles →
-MLX generates response token by token → AICoachSheet appends chunks to responseText → UI updates live
+Home coach card / mic → CoachChatView → (first open) CoachChatStore.prepareModel loads cached
+weights, or shows the Download call to action → athlete sends a message →
+CoachChatStore.send attaches HomeView.buildCoachRequest() (last 4 weeks of completed exercises,
+next 2 weeks of planned ones, the strength board) on the first turn only →
+MLXAICoachService.streamChat builds chat turns + tool schemas (today's date in both) →
+MLX generates → text streams into the coach bubble; tool calls are validated by
+CoachToolDecoder and surface as proposal cards → Accept → HomeView applies via
+CoachProposalApplier (or opens a pre-filled RecordWorkoutSheet) → @Query fires → UI updates
 ```
+See [AI_COACH.md](AI_COACH.md) for the full sequence.
 
 ### Editing or deleting a recorded workout
 ```
@@ -188,13 +182,13 @@ highlightedID with an ease-in-out animation.
 ## Testing
 
 Unit tests cover:
-- **Models**: Exercise persistence, the nested `workout` Codable composite attribute round-tripping through SwiftData, `isCompleted` / completed-vs-planned in-memory filtering, `Workout(draftFrom:)`, repeat flag, felt-rating default and persistence
+- **Models**: Exercise persistence, the nested `workout` (JSON-encoded into `workoutData`) round-tripping through SwiftData, `isCompleted` / completed-vs-planned in-memory filtering, `Workout(draftFrom:)`, `feeling` / `perceivedExertion` defaults and persistence, `seriesID` and `countsTowardMileage`
 - **Extensions**: date arithmetic (week boundaries, month boundaries, same-day/week/month checks), distance formatting, duration formatting, **pace formatting** (metric/imperial, zero-distance fallback, truncation behavior)
 - **Types**: ExerciseType codable round-trip, identifiable conformance
 - **Drag items**: ExerciseDragItem codable round-trip
-- **Repeat**: isRepeating default value, init parameter, persistence, day-of-week matching
-- **AI Coach**: type conversion tests (SwiftData → AICoachCore), `StubAICoachService` response and streaming
-- **AICoachCore package tests** (separate target): prompt builder formatting (RPE and feeling inclusion/omission, notes handling, unit respect, ordering, empty inputs), distance/duration formatting, generation config codable round-trip
+- **Series**: `SeriesGenerator` expansion (cadences, end dates, progression, occurrence cap) and `ExercisePlanner` bulk create/update/delete/detach
+- **AI Coach**: type conversions (SwiftData → AICoachCore), `StubAICoachService`, `CoachChatStore`, `CoachProposalApplier`, download progress and byte-rate math, voice draft merging — see [AI_COACH.md](AI_COACH.md#15-testing)
+- **AICoachCore package tests** (separate target): prompt builder formatting (RPE and feeling inclusion/omission, notes handling, unit respect, ordering, empty inputs, strength section), chat turns and date anchor, tool schemas, tool-call decoding and every rejection path, distance/duration formatting, generation config codable round-trip
 - **Workout list pagination**: pure-math helpers in `WorkoutListPagination` (page index boundaries, total page counts, empty-state handling)
 - **Workout detail edit**: `WorkoutEditor.apply(_:to:)` rewrites the exercise's identity fields and rebuilds the nested `workout` from edited actuals, preserves import metadata (`source`, `externalID`), and `modelContext.delete(exercise)` scopes correctly
 
@@ -202,7 +196,9 @@ App tests use `ModelContainerFactory.makePreviewContainer()` for isolated in-mem
 
 ### Functional UI tests
 
-`Hybrid AIthleticsUITests/HistoryUITests.swift` (XCTest + `XCUIApplication`; Swift Testing doesn't integrate with XCUI) validates the History tab end-to-end:
+Functional UI tests live in `Hybrid AIthleticsUITests/` (XCTest + `XCUIApplication`; Swift Testing doesn't integrate with XCUI): `HomeUITests` (Home tab, coach chat, proposals, voice entry, model download flow — run with `-uiTestCoachNotDownloaded` for the download cases), `AerobicTrainingUITests`, `StrengthLibraryUITests`, `RatingPickerUITests`, and `HistoryUITests`.
+
+`HistoryUITests.swift` validates the History tab end-to-end:
 
 - First-page rendering (10 rows), prev/next button enablement at page boundaries
 - Forward/backward page navigation via `workoutList.prevPage` / `workoutList.nextPage` identifiers

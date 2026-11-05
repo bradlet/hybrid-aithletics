@@ -12,50 +12,62 @@ Hybrid AIthletics uses **SwiftData**, Apple's ORM framework built on top of Core
 
 ## Entity-Relationship Diagram
 
-```
-There is a single persisted entity, Exercise. Recorded-instance data lives in a
-nested Workout value struct (not a table) stored inline on Exercise.workout. An
-exercise with workout == nil is planned only; a non-nil workout means it was
-recorded.
+The persisted `@Model` entities are `Exercise`, `StrengthExercise`, `UserLibraryExercise`, and `AppConfiguration` (`ModelContainerFactory`'s schema). Recorded-instance data does **not** get its own table: `Exercise.workout` is a `Workout` value struct and `StrengthExercise.workouts` is a `[StrengthWorkout]` array, each JSON-encoded into a `Data?` column on its owner. An exercise with `workout == nil` is planned only; a non-nil `workout` means it was recorded.
 
-┌──────────────────────────────────┐
-│             Exercise               │  @Model (the only persisted entity)
-│────────────────────────────────────│
-│ id: UUID                           │
-│ name: String                       │
-│ type: ExerciseType                 │
-│ durationSeconds: Int               │  planned target
-│ distanceMiles: Double              │  planned target
-│ notes: String                      │  planning notes
-│ date: Date                         │  single date (planned and/or performed)
-│ isRepeating: Bool                  │
-│ workout: Workout?                  │──┐ embedded value struct (nil = planned)
-│ isCompleted: Bool { workout != nil }│  │
-└──────────────────────────────────┘  │
-                                       ▼
-                          ┌──────────────────────────┐
-                          │     Workout (Codable)     │  value type, no table
-                          │──────────────────────────│
-                          │ durationSeconds: Int      │  actual
-                          │ distanceMiles: Double     │  actual
-                          │ notes: String             │  post-workout notes
-                          │ feeling: Int? (1–5)       │  nil = not recorded
-                          │ perceivedExertion: Int?   │  1–10, nil = not recorded
-                          │ source: String            │
-                          │ externalID: String?       │
-                          └──────────────────────────┘
+```mermaid
+erDiagram
+    Exercise ||--o| Workout : "workout (JSON in workoutData)"
+    StrengthExercise ||--o{ StrengthWorkout : "workouts (JSON in workoutsData)"
+    StrengthExercise }o..o| UserLibraryExercise : "libraryExerciseID (by id, no relationship)"
 
-┌─────────────────────────┐       ┌─────────────────────────┐
-│    AppConfiguration      │       │     ExerciseType         │
-│─────────────────────────│       │─────────────────────────│
-│ useMetricUnits: Bool     │       │ (enum, not a table)      │
-│ googleSheetsSyncEnabled  │       │ 13 cases: run, longRun,  │
-│ googleSheetsSpreadsheetID│       │ tempoRun, intervalRun,   │
-└─────────────────────────┘       │ easyRun, recoveryRun,    │
-                                   │ walk, bike, swim, hike,  │
-                                   │ elliptical, race, other  │
-                                   └─────────────────────────┘
+    Exercise {
+        UUID id
+        String name
+        ExerciseType type
+        Int durationSeconds "planned target"
+        Double distanceMiles "planned target"
+        String notes "planning notes"
+        Date date "single date, planned and/or performed"
+        UUID seriesID "optional; shared by a recurring series"
+        Bool countsTowardMileage
+        Data workoutData "private; nil = planned only"
+    }
+    Workout {
+        Int durationSeconds "actual"
+        Double distanceMiles "actual"
+        String notes "post-workout notes"
+        Int feeling "optional 1-5"
+        Int perceivedExertion "optional RPE 1-10"
+        String source
+        String externalID "optional"
+    }
+    StrengthExercise {
+        String name
+        String muscleGroupRaw
+        Int weekdayIndex "Sunday=0"
+        Bool isOffloaded
+        Int sortOrder
+        Int plannedSets "optional"
+        Int plannedReps "optional"
+    }
+    StrengthWorkout {
+        Date date
+        Double weightPounds
+        String recordingType
+    }
+    UserLibraryExercise {
+        String id
+        String name
+    }
+    AppConfiguration {
+        Bool useMetricUnits
+        Int weekStartDay "1=Sun ... 7=Sat"
+        Bool googleSheetsSyncEnabled
+        String googleSheetsSpreadsheetID
+    }
 ```
+
+`ExerciseType` is an enum (13 cases), not a table; it is stored as its `String` raw value. The strength models are covered in depth in [STRENGTH_TRAINING.md](STRENGTH_TRAINING.md).
 
 ## Entities
 
@@ -74,9 +86,10 @@ An Exercise represents a **single training activity** — planned, recorded, or 
 | `distanceMiles` | `Double` | `0.0` | **Planned (target)** distance in **miles** — the canonical storage unit regardless of user preference. The *actual* recorded distance lives in `workout.distanceMiles`. See [Distance Convention](#distance-convention). |
 | `notes` | `String` | `""` | Free-text notes about the *planned* exercise. Post-workout notes live in `workout.notes`. |
 | `date` | `Date` | `Date()` | The **single** date for this activity — the day it is planned and/or performed (renamed from the old `scheduledDate`). Preserves the full timestamp so the History tab can show time-of-day. **Not** normalized to midnight; day/week grouping flows through `Date+Week` helpers (`startOfDay`, `startOfWeek`, `isSameDay`), which compare calendar components. If an activity is performed on a different day than planned, it is treated as a separate `Exercise` — there is no plan-date / done-date split. |
-| `isRepeating` | `Bool` | `false` | When `true`, this exercise acts as a template that appears "virtually" on the same day-of-week every future week. See [Repeating Exercises](#repeating-exercises). |
-| `workout` | `Workout?` | `nil` | Recorded-instance data, present once the activity has been performed. `nil` means *planned only*. Stored inline as a Codable composite attribute — no second table. See [Workout](#workout) below. |
-| `isCompleted` | `Bool` (computed) | — | `workout != nil`. The single source of truth for "has this been recorded?". |
+| `seriesID` | `UUID?` | `nil` | Shared by every exercise bulk-created as one recurring series; `nil` for a one-off. See [Recurring Series](#recurring-series). |
+| `countsTowardMileage` | `Bool` | `true` | `false` keeps the activity (e.g. a casual walk) out of mileage aggregates — weekly totals, stat cards, charts. It renders as a hollow calendar dot and a dimmed History row with a "Not training" badge. |
+| `workout` | `Workout?` | `nil` | Recorded-instance data, present once the activity has been performed. `nil` means *planned only*. JSON-encoded into a private `workoutData: Data?` column on the same record — no second table. See [Workout](#workout) below. |
+| `isCompleted` | `Bool` (computed) | — | `workoutData != nil` (equivalent to `workout != nil`, without decoding). The single source of truth for "has this been recorded?". |
 
 **Initialization behavior:** The initializer stores `date` as provided (no midnight normalization). Planned-creation flows pass a day-level date; recorded flows (record sheet, imports) pass the real performed date/timestamp.
 
@@ -86,7 +99,7 @@ An Exercise represents a **single training activity** — planned, recorded, or 
 
 **File:** `Models/Workout.swift`
 
-A Workout holds the **recorded-instance data** for an Exercise — the metrics that only exist once the activity has actually been performed. It is **not** a SwiftData `@Model`: it is a plain `Codable` value `struct` persisted inline on `Exercise.workout` (a Codable composite attribute, CloudKit-compatible, no separate table). The activity's date, name, and type live on the owning `Exercise`.
+A Workout holds the **recorded-instance data** for an Exercise — the metrics that only exist once the activity has actually been performed. It is **not** a SwiftData `@Model`: it is a plain `Codable` value `struct` persisted inline on its `Exercise` as JSON in a private `workoutData: Data?` column (CloudKit mirrors it as a blob; no separate table). It is deliberately **not** stored as a `Workout?` Codable composite attribute: SwiftData's composite decoder `fatalError`s when fetching an optional value struct. The activity's date, name, and type live on the owning `Exercise`.
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
@@ -108,12 +121,14 @@ Creates a recorded workout pre-filled with the actuals copied from a planned exe
 
 `feeling` and `perceivedExertion` are what let the on-device AI Coach distinguish between *planned* workload and *experienced* workload. They are deliberately **two fields, not one**: how hard a session was and how the athlete felt through it are independent signals. Two athletes can run the same 5-mile tempo at the same pace and experience it very differently, and the same athlete can log an RPE 9 feeling strong (a good session) or feeling weak (an overreaching flag). Collapsing them loses exactly that distinction.
 
-When the coach serializes recent workouts into its prompt (see `Packages/AICoachCore/Sources/AICoachCore/AICoachPromptBuilder.swift`), each rating is emitted verbatim and omitted entirely when `nil` — the model is told those sessions are unrated rather than assuming a default:
+When the coach serializes recent workouts into its prompt (see `Packages/AICoachCore/Sources/AICoachCore/AICoachPromptBuilder.swift`), each rating is emitted verbatim and omitted entirely when `nil` — never defaulted or derived from the other. The chat system preamble tells the model that the two are independent and that either may be missing:
 
 ```
 - 2026-07-28 Tue Long Run, 12.0 mi, 1:30:00, RPE 9/10, felt very weak — "had to walk last mile"
 - 2026-07-29 Wed Easy Run, 4.0 mi, 35:00, RPE 8/10
-``` The app builds the coach's "recent workouts" from completed exercises (`isCompleted`) and its "upcoming exercises" from planned-only ones; `CoachWorkout(from:)` reads the exercise's `date`/`type` plus the recorded `workout` metrics. See [docs/adrs/1-use-lightweight-onboard-llm.md](adrs/1-use-lightweight-onboard-llm.md) for the broader architectural decision.
+```
+
+`HomeView.buildCoachRequest()` builds the coach's "recent workouts" from completed exercises (`isCompleted`) in the last 4 weeks and its "upcoming exercises" from planned-only ones in the next 2 weeks; `CoachWorkout(from:)` reads the exercise's `date`/`type` plus the recorded `workout` metrics. A coach `record_workout` proposal carries the same two independent optionals and pre-fills `RecordWorkoutSheet` with them, so an unstated rating stays unrecorded. See [docs/AI_COACH.md](AI_COACH.md) for the coach and [docs/adrs/1-use-lightweight-onboard-llm.md](adrs/1-use-lightweight-onboard-llm.md) for the broader architectural decision.
 
 ---
 
@@ -121,11 +136,12 @@ When the coach serializes recent workouts into its prompt (see `Packages/AICoach
 
 **File:** `Models/AppConfiguration.swift`
 
-A **singleton** preferences record. The app creates exactly one instance on first launch and reads it reactively. There is no settings screen yet — the value is programmatically set and will be exposed to the user in a future release.
+A **singleton** preferences record. The app creates exactly one instance on first launch and reads it reactively. Units and week start are edited in the Settings screen (`Views/Settings/SettingsView.swift`); Google Sheets sync is configured from the History tab.
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `useMetricUnits` | `Bool` | `false` | When `true`, distances display in kilometers. When `false`, miles. |
+| `weekStartDay` | `Int` | `1` | First day of the week for weekly aggregation and the Aerobic Training weekly calendar: 1 = Sunday … 7 = Saturday. Monthly calendar grids stay Sunday-first. Injected as `@Environment(\.weekStartDay)`. |
 | `googleSheetsSyncEnabled` | `Bool` | `false` | Whether one-way Google Sheets export sync is enabled. |
 | `googleSheetsSpreadsheetID` | `String` | `""` | The spreadsheet written to; empty until first enable. |
 
@@ -194,8 +210,8 @@ timeline — an imported workout simply becomes a completed `Exercise`.
 
 #### Querying completed vs planned
 
-A `#Predicate`/`@Query` cannot reach into a Codable composite attribute, so
-filtering by `workout != nil` (or by any nested field) is **not** expressed at the
+A `#Predicate`/`@Query` cannot reach inside the JSON-encoded `workoutData` blob, so
+filtering by recorded state (or by any nested field) is **not** expressed at the
 database level. Instead the views run an **unfiltered** `@Query private var
 allExercises: [Exercise]` and derive `completed` / `planned` in memory:
 
@@ -210,45 +226,20 @@ pattern (`AerobicTrainingView`) and is trivially cheap at single-user scale.
 
 ---
 
-## Repeating Exercises
+## Recurring Series
 
-Exercises with `isRepeating = true` behave as **templates** that appear on the same day-of-week every week from the current week forward.
+Recurring plans are **eager bulk inserts of concrete `Exercise` rows**. There are no templates and no virtual instances: every occurrence is a real record, individually editable, recordable, and draggable.
 
-### How it works
-
-The system uses a **virtual display with on-demand materialization** pattern:
-
-1. **No records are pre-created.** A single Exercise with `isRepeating = true` and `date = Monday April 6` is the only database record.
-
-2. **Virtual display:** When the user views a future week (e.g., April 13-19), the app's query logic checks: "Are there any repeating exercises whose day-of-week matches a day in this week?" If `date` falls on a Monday (index 0), the exercise appears on every future Monday.
-
-3. **Duplicate suppression:** If a concrete Exercise with the same `name`, `type`, and day-of-week already exists for the target week, the virtual instance is not shown. This prevents duplicates after materialization.
-
-4. **Materialization:** When the user interacts with a virtual exercise (records a workout, edits it, or drags it), the app creates a new **concrete** Exercise record for that specific date with `isRepeating = false`. The original template remains unchanged.
-
-5. **Past weeks:** Virtual repeating exercises only appear for the current week and future weeks. Past weeks show only concrete records — what was actually scheduled and/or materialized.
-
-### Data flow example
-
-```
-Week 1: User creates "Monday Run" with isRepeating=true, date=Apr 6
-         → Database: 1 Exercise record (planned only, workout == nil)
-
-Week 2: User views Apr 13-19
-         → App finds the repeating exercise, mondayBasedWeekdayIndex=0
-         → Monday Apr 13 has no concrete "Monday Run"
-         → Virtual instance displayed on Monday Apr 13
-
-Week 2: User taps "Record Workout" on the virtual Monday Run
-         → App materializes: creates new Exercise(date=Apr 13, isRepeating=false)
-         → That exercise's .workout is populated with the recorded actuals
-         → Database: 2 Exercise records (one planned template, one completed)
-
-Week 3: User views Apr 20-26
-         → Virtual instance displayed on Monday Apr 20 (no concrete exists yet)
+```mermaid
+flowchart LR
+    Spec["ExerciseSeriesSpec<br/>(cadence, inclusive end date,<br/>every-N-occurrences progression)"] --> Gen["SeriesGenerator.occurrences(for:)<br/>pure expansion, 400-occurrence cap"]
+    Gen --> Create["ExercisePlanner.createSeries<br/>inserts one Exercise per occurrence,<br/>all sharing one seriesID"]
+    Create --> DB[("Exercise rows")]
 ```
 
----
+- **Monthly cadences** are anchored to the start date.
+- **Bulk edits and deletes** go through `ExercisePlanner` (`members(of:scope:)`, `updateSeries`, `deleteSeries`), scoped to the whole series or to occurrences on/after a day. Completed occurrences are left alone unless explicitly included.
+- **Editing one occurrence on its own**: `ExercisePlanner.detach(_:)` clears its `seriesID`. The AI coach's single-session proposals do this before removing a series member.
 
 ## Distance Convention
 
@@ -280,7 +271,7 @@ A factory enum (no instances, only static methods) that creates SwiftData's `Mod
 | `makeContainer()` | On-disk (SQLite) | Enabled (`.automatic`) | Production app |
 | `makePreviewContainer()` | In-memory only | Disabled | Unit tests and SwiftUI previews |
 
-The schema is explicitly defined as `[Exercise.self, AppConfiguration.self]`. `Workout` is **not** in the schema — it is a Codable value embedded on `Exercise`, not a separate `@Model`.
+The schema is explicitly defined as `[Exercise.self, StrengthExercise.self, UserLibraryExercise.self, AppConfiguration.self]`. `Workout` and `StrengthWorkout` are **not** in the schema — they are Codable values JSON-encoded onto their owning `@Model`, not separate entities.
 
 ### UnitEnvironment
 
@@ -311,13 +302,13 @@ All model properties **must have default values** in their declarations (not jus
 ```swift
 var name: String = ""           // Not var name: String (would crash on partial sync)
 var distanceMiles: Double = 0.0
-var isRepeating: Bool = false
-var workout: Workout? = nil     // optional → defaults to nil
+var countsTowardMileage: Bool = true
+private var workoutData: Data? = nil   // optional → defaults to nil
 ```
 
-**Embedded Codable values.** The nested `Workout` is stored as a Codable composite
-attribute. SwiftData persists it as a single encoded field and CloudKit mirrors it as
-that encoded blob — no separate record type. The property is optional with a `nil`
-default, which satisfies the "every property has a default" rule. The trade-off is
-that the nested fields are **not** queryable from a `#Predicate` (see
+**Embedded Codable values.** The nested `Workout` is JSON-encoded into a `Data?`
+column (`workoutData`) and exposed through the computed `Exercise.workout`; CloudKit
+mirrors it as a blob, with no separate record type. The column is optional with a
+`nil` default, which satisfies the "every property has a default" rule. The trade-off
+is that the nested fields are **not** queryable from a `#Predicate` (see
 [Querying completed vs planned](#querying-completed-vs-planned)).

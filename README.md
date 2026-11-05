@@ -12,25 +12,34 @@ We don't withhold any features from the free app. Upgrade one time only to suppo
 
 ## Features
 
-### Aerobic Training (Tab 1)
-- **Weekly calendar** with Sunday-Saturday swimlanes showing planned exercises
+### Home (Tab 1)
+- **Today's training** — the day's planned aerobic sessions and strength lane, with quick record and "Log Lift" shortcuts
+- **Coach entry** — a card that opens the AI coach conversation, plus a mic button for voice-first entry (see [AI Coach](#ai-coach))
+
+### Aerobic Training (Tab 2)
+- **Weekly calendar** with one swimlane per day, ordered from your configured week-start day (Settings)
 - **Drag-and-drop** to reschedule exercises between days
 - **Mileage header** showing planned vs. completed miles for the current week with progress indicator
 - **Record workouts** via the checkmark button on any exercise — pre-fills from the plan, all fields editable
-- **Repeat weekly** — mark any exercise as repeating and it automatically appears on the same day every week
+- **Recurring series** — schedule an exercise to repeat on a cadence until an end date, optionally progressing every N occurrences; each occurrence is a real, individually editable session
 - **Exercise types**: Run, Long Run, Tempo Run, Interval Run, Easy Run, Recovery Run, Walk, Bike, Swim, Hike, Elliptical, Other
 
 ### AI Coach
-- **On-device running coach** powered by Google's Gemma 4 E2B running locally via [MLX-Swift](https://github.com/ml-explore/mlx-swift-examples)
-- Reviews the last four weeks of recorded workouts — including two optional radial-dial ratings, **"How did it feel?" (1–5, Very Weak → Very Strong)** and **"How hard was it?" (RPE 1–10)** — and the next two weeks of scheduled exercises
-- Suggests concrete adaptations: workout type, duration, distance, intensity, additions, or removals
-- **Fully offline** after initial model download, no API calls, no subscription — aligned with the one-time-payment business model
-- Model weights (~4.3 GB) are downloaded from Hugging Face on first use and cached locally for offline access
+- **On-device, conversational running coach** powered by Google's Gemma 4 E2B running locally via [mlx-swift-lm](https://github.com/ml-explore/mlx-swift-lm), reached from the Home tab by typing or by voice
+- Sees the last four weeks of recorded workouts — including two optional radial-dial ratings, **"How did it feel?" (1–5, Very Weak → Very Strong)** and **"How hard was it?" (RPE 1–10)** — the next two weeks of scheduled exercises, and your weekly strength board
+- **Acts through tool calls you approve**: it can propose changes to a planned session, record a workout you describe, program a strength day, or move/remove/offload a strength exercise. Nothing changes until you tap Accept
+- **Fully offline** after the model download, no API calls, no subscription — aligned with the one-time-payment business model
+- Model weights (~4.3 GB) download from Hugging Face only when you choose to from the coach screen, then stay cached for offline use
 
-### Strength Training (Tab 2)
-- Placeholder — weekly strength training calendar coming in a future release
+See [docs/AI_COACH.md](docs/AI_COACH.md) for the contributor guide.
 
-### History (Tab 3)
+### Strength Training (Tab 3)
+- **Kanban-style weekly board** — one lane per weekday, each with an active Plan section and an Offloaded holding section; drag cards to reorder, move between days, or offload
+- **Exercise library** of 100 bundled exercises plus your own custom entries, filterable by muscle group, with optional sets × reps plans
+- **Weight records** per exercise, tagged by recording type (max, average, first/last/min set)
+- See [docs/STRENGTH_TRAINING.md](docs/STRENGTH_TRAINING.md)
+
+### History (Tab 4)
 - **Summary stats**: all-time, year-to-date, and month-to-date mileage
 - **Monthly calendar** with colored workout indicators and day-tap detail popovers
 - **Paginated workout log** sorted by most recent, with lazy-loading scroll
@@ -52,20 +61,31 @@ We don't withhold any features from the free app. Upgrade one time only to suppo
 
 ```
 Hybrid AIthletics/
-  Models/           SwiftData @Model classes and ExerciseType enum
-  Config/           ModelContainer factory, environment keys (units, aiCoach)
-  Extensions/       Date arithmetic, distance formatting
+  Models/           SwiftData @Model classes and enums
+  Config/           ModelContainer factory, environment keys (units, week start, aiCoach, coachChat, …), UI test fixtures
+  Extensions/       Date arithmetic, distance/duration/pace and weight formatting
+  Resources/        Bundled strength exercise library (JSON)
   Services/
-    AICoach/        Protocol-based on-device coach (MLX + Gemma 4 E2B)
+    AICoach/          On-device coach: service protocol, MLX implementation, chat store, proposal applier, speech-to-text
+    ExercisePlanner/  Recurring series generation and bulk edits
+    ExerciseLibrary/  Strength exercise library providers
+    GoogleSheetsSync/ Google Sheets export
+    HealthKitImport/  Apple Health import
+    WorkoutCSV/       CSV import/export
   Views/
-    AerobicTraining/  Weekly calendar, exercise cards, add/record sheets, AI coach sheet
-    Strength/         Placeholder view
-    History/          Summary stats, monthly calendar, workout list
+    Home/             Today's training, coach entry card, coach chat
+    AerobicTraining/  Weekly calendar, exercise cards, add/record sheets
+    Strength/         Weekly strength board, exercise library
+    History/          Summary stats, monthly calendar, workout list, charts
+    Settings/         Preferences (units, week start)
+    Shared/           Cross-tab form sections and rating dials
   ContentView.swift   Root TabView
-  Hybrid_AIthleticsApp.swift  App entry point (injects AICoachService)
+  Hybrid_AIthleticsApp.swift  App entry point (injects services)
+Packages/AICoachCore/ Shared coach library: prompt builder, tools, decoder, generation config
+Evals/                AI coach prompt inspection + eval runner
 ```
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for architecture documentation, [docs/DATA_MODEL.md](docs/DATA_MODEL.md) for an in-depth data model reference, [docs/adrs/](docs/adrs/) for architectural decision records, [docs/MOBILE_TESTING.md](docs/MOBILE_TESTING.md) for testing on a physical iPhone, and [docs/RELEASING.md](docs/RELEASING.md) for App Store publishing instructions.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for architecture documentation, [docs/AI_COACH.md](docs/AI_COACH.md) for the AI coach contributor guide, [docs/DATA_MODEL.md](docs/DATA_MODEL.md) for an in-depth data model reference, [docs/adrs/](docs/adrs/) for architectural decision records, [docs/MOBILE_TESTING.md](docs/MOBILE_TESTING.md) for testing on a physical iPhone, and [docs/RELEASING.md](docs/RELEASING.md) for App Store publishing instructions.
 
 ## Building
 
@@ -73,7 +93,7 @@ Open `Hybrid AIthletics.xcodeproj` in Xcode 15+ and build for an iOS 17+ simulat
 
 ### AI Coach Model
 
-The AI coach model (~4.3 GB, Gemma 4 E2B 4-bit) downloads automatically from Hugging Face on first use and is cached locally for offline access. No manual setup is required — the MLXLLM framework handles downloading and caching transparently.
+The AI coach model (~4.3 GB, Gemma 4 E2B 4-bit) is not bundled. It downloads from Hugging Face when the user taps Download on the coach screen (never automatically) and is cached locally for offline access. No developer setup is required — `Services/AICoach/MLXModelLoading.swift` supplies the Hugging Face downloader, since mlx-swift-lm 3.x no longer bundles one.
 
 > **Note:** The app compiles, runs, and passes all tests without any model present. All unit tests use `StubAICoachService`.
 

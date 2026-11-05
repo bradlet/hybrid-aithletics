@@ -19,49 +19,12 @@ struct InspectPromptCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Scenario ID to inspect.")
     var scenario: String = "high-rpe"
 
-    @Option(name: .long, help: "Prompt mode: flat, chat, or conversation.")
-    var promptMode: String = "chat"
-
     func run() async throws {
-        // `conversation` is the tool-calling coach prompt, local to this
-        // command: the eval generator's shared PromptMode only covers the
-        // one-shot modes it can score.
-        if promptMode == "conversation" {
-            guard let s = ScenarioLibrary.scenario(id: scenario) else {
-                print("Error: Unknown scenario '\(scenario)'. Available: \(ScenarioLibrary.all.map(\.id).joined(separator: ", "))")
-                throw ExitCode.validationFailure
-            }
-            printConversation(scenario: s)
-            return
-        }
-
-        guard let mode = PromptMode(rawValue: promptMode) else {
-            print("Error: --prompt-mode must be 'flat', 'chat', or 'conversation'")
-            throw ExitCode.validationFailure
-        }
-
         guard let s = ScenarioLibrary.scenario(id: scenario) else {
             print("Error: Unknown scenario '\(scenario)'. Available: \(ScenarioLibrary.all.map(\.id).joined(separator: ", "))")
             throw ExitCode.validationFailure
         }
-
-        let divider = String(repeating: "=", count: 60)
-        print(divider)
-        print("Scenario: \(s.id) (\(s.name))")
-        print("Prompt mode: \(mode.rawValue)")
-        print(divider)
-
-        switch mode {
-        case .flat:
-            print("\n[Single user message]")
-            print(AICoachPromptBuilder.buildPrompt(for: s.request))
-        case .chat:
-            print("\n[System message]")
-            print(AICoachPromptBuilder.systemPreamble)
-            print("\n[User message]")
-            print(AICoachPromptBuilder.buildUserContent(for: s.request))
-        }
-        print("")
+        printConversation(scenario: s)
     }
 
     /// Prints what the tool-calling coach actually sees: the conversational
@@ -72,7 +35,6 @@ struct InspectPromptCommand: AsyncParsableCommand {
         let divider = String(repeating: "=", count: 60)
         print(divider)
         print("Scenario: \(s.id) (\(s.name))")
-        print("Prompt mode: conversation")
         print(divider)
 
         let request = CoachChatRequest(

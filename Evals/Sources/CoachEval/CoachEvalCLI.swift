@@ -13,10 +13,8 @@ struct CoachEvalCLI: AsyncParsableCommand {
         commandName: "coach-eval",
         abstract: "Evaluate and iterate on the AI Coach's prompt and generation parameters.",
         subcommands: [
-            RunEvalsCommand.self,
             InspectPromptCommand.self,
-            CompareCommand.self,
         ],
-        defaultSubcommand: RunEvalsCommand.self
+        defaultSubcommand: InspectPromptCommand.self
     )
 }

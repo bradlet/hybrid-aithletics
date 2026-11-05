@@ -29,6 +29,8 @@ struct RecordWorkoutSheet: View {
     /// so the athlete confirms the numbers the coach heard before anything
     /// lands in their history.
     var prefill: CoachProposalApplier.WorkoutPrefill? = nil
+    /// A favorite to pre-fill a quick add from (a Home favorite chip), or nil.
+    var initialFavorite: FavoriteWorkout? = nil
 
     @State private var name = ""
     @State private var type: ExerciseType = .run
@@ -107,11 +109,28 @@ struct RecordWorkoutSheet: View {
             }
             countsTowardMileage = exercise.countsTowardMileage
             previousType = exercise.type
+        } else if let initialFavorite {
+            apply(initialFavorite)
         } else {
             name = type.rawValue
             previousType = type
         }
         workoutDate = defaultDate
+    }
+
+    /// Fills the workout's identity and targets from a favorite. The date,
+    /// notes and ratings are left alone — a favorite is a preset, not a record
+    /// of how a session went.
+    private func apply(_ favorite: FavoriteWorkout) {
+        let values = FavoriteFormValues(favorite, metric: useMetricUnits)
+        name = values.name
+        type = values.type
+        previousType = values.type
+        hours = values.hours
+        minutes = values.minutes
+        seconds = values.seconds
+        distance = values.displayDistance
+        countsTowardMileage = values.countsTowardMileage
     }
 
     /// Fills the form from a coach proposal.

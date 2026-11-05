@@ -8,7 +8,7 @@
 //  These tests launch the app with the `-uiTestSeed` argument, which forces
 //  an in-memory model container and seeds 25 deterministic workouts (see
 //  `UITestFixtures.swift`). "Test Workout 1" is index 0, so it seeds with
-//  feeling 1 ("Very Weak") and exertion 1 ("Very Easy").
+//  feeling 1 ("Very Weak") and exertion 1 ("Very Light").
 //
 //  Exact-value assertions go through the chevron steppers: XCUI cannot invoke
 //  a custom `accessibilityAdjustableAction`, and drag distance is
@@ -116,17 +116,17 @@ final class RatingPickerUITests: XCTestCase {
         let app = launchAndOpenDials()
 
         let label = app.staticTexts["exertionPicker.valueLabel"]
-        XCTAssertEqual(label.label, "Very Easy", "fixture 1 seeds exertion = 1")
+        XCTAssertEqual(label.label, "Very Light", "fixture 1 seeds exertion = 1")
 
         let increment = app.buttons["exertionPicker.increment"]
         increment.tap()
-        XCTAssertEqual(label.label, "Easy", "2–3 share the Easy bucket")
+        XCTAssertEqual(label.label, "Light", "2 is Light")
 
         for _ in 0..<3 { increment.tap() }
-        XCTAssertEqual(label.label, "Moderate", "4–5 share the Moderate bucket")
+        XCTAssertEqual(label.label, "Hard", "5–6 share the Hard bucket")
 
         for _ in 0..<5 { increment.tap() }
-        XCTAssertEqual(label.label, "Maximum Effort", "10 is its own bucket")
+        XCTAssertEqual(label.label, "Maximum", "10 is its own bucket")
     }
 
     @MainActor
@@ -153,7 +153,7 @@ final class RatingPickerUITests: XCTestCase {
         let feelingAfterEdit = app.staticTexts["feelingPicker.valueLabel"].label
         let exertionAfterEdit = app.staticTexts["exertionPicker.valueLabel"].label
         XCTAssertEqual(feelingAfterEdit, "Weak")
-        XCTAssertEqual(exertionAfterEdit, "Easy")
+        XCTAssertEqual(exertionAfterEdit, "Light")
 
         app.buttons["workoutDetail.saveButton"].tap()
 

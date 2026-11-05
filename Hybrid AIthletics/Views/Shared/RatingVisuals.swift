@@ -72,26 +72,28 @@ enum FeelingVisuals {
 
 /// Stateless 1–10 perceived-exertion (RPE) → name / tint mapping.
 ///
-/// Buckets follow the standard RPE descriptions, from a fully conversational
-/// effort at 1 to an all-out sprint at 10 that cannot be sustained.
+/// Labels match Garmin's perceived-effort scale word for word, so a rating
+/// copied from a Garmin activity reads the same here.
 enum ExertionVisuals {
 
     /// Valid values on the perceived-exertion scale.
     static let range = 1...10
 
-    /// Plain-English name for a perceived-exertion level. The scale reads
-    /// symmetrically about "Moderate": Very Easy → Easy → Moderate → Hard →
-    /// Very Hard, with an all-out tier at the top.
+    /// Plain-English name for a perceived-exertion level, using Garmin's
+    /// labels: Very Light → Light → Moderate → Somewhat Hard → Hard →
+    /// Very Hard → Extremely Hard → Maximum.
     /// - Parameter exertion: RPE level, or `nil` for unset.
     /// - Returns: A display name; `"Not set"` for `nil` or out-of-range input.
     static func displayName(for exertion: Int?) -> String {
         switch exertion {
-        case 1:     return "Very Easy"
-        case 2, 3:  return "Easy"
-        case 4, 5:  return "Moderate"
-        case 6, 7:  return "Hard"
-        case 8, 9:  return "Very Hard"
-        case 10:    return "Maximum Effort"
+        case 1:     return "Very Light"
+        case 2:     return "Light"
+        case 3:     return "Moderate"
+        case 4:     return "Somewhat Hard"
+        case 5, 6:  return "Hard"
+        case 7, 8:  return "Very Hard"
+        case 9:     return "Extremely Hard"
+        case 10:    return "Maximum"
         default:    return "Not set"
         }
     }

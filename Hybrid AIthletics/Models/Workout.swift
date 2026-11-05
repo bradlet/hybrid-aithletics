@@ -23,7 +23,7 @@ struct Workout: Codable, Hashable, Sendable {
     /// How the athlete felt, 1 (Very Weak) … 5 (Very Strong). `nil` means the
     /// user did not record a feeling. Feeds the AI Coach.
     var feeling: Int? = nil
-    /// Rate of Perceived Exertion, 1 (Very Easy) … 10 (Maximum Effort).
+    /// Rate of Perceived Exertion, 1 (Very Light) … 10 (Maximum).
     /// `nil` means the user did not record it. Feeds the AI Coach.
     ///
     /// Independent of `feeling`: a high exertion the athlete felt strong

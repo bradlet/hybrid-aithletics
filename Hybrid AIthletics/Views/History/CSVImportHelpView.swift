@@ -128,7 +128,7 @@ struct CSVImportHelpView: View {
                     .font(.caption)
                 Text("**feeling** \u{2014} 1\u{2013}5 integer (1 = Very Weak, 5 = Very Strong), leave blank for unrated")
                     .font(.caption)
-                Text("**perceived_exertion** \u{2014} 1\u{2013}10 integer (1 = Very Easy, 10 = Maximum Effort), leave blank for unrated")
+                Text("**perceived_exertion** \u{2014} 1\u{2013}10 integer (1 = Very Light, 10 = Maximum), leave blank for unrated")
                     .font(.caption)
             }
         } header: {

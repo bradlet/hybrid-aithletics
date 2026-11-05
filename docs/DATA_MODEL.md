@@ -117,7 +117,7 @@ A Workout holds the **recorded-instance data** for an Exercise — the metrics t
 | `distanceMiles` | `Double` | `0.0` | **Actual** recorded distance in miles. Same storage convention as Exercise. |
 | `notes` | `String` | `""` | Post-workout notes (e.g. "felt great", "knee pain at mile 2"). |
 | `feeling` | `Int?` | `nil` | How the athlete felt, on a 1–5 scale (1 = Very Weak, 5 = Very Strong). `nil` means not recorded. Feeds the on-device AI Coach — see [AI Coach Input](#ai-coach-input) below. |
-| `perceivedExertion` | `Int?` | `nil` | Rate of Perceived Exertion, 1–10 (1 = Very Easy, 10 = Maximum Effort). `nil` means not recorded. **Independent of `feeling`** — see below. |
+| `perceivedExertion` | `Int?` | `nil` | Rate of Perceived Exertion, 1–10 (1 = Very Light, 10 = Maximum). `nil` means not recorded. **Independent of `feeling`** — see below. |
 | `source` | `String` | `"Manual"` | Provenance — the raw value of a `WorkoutSource` (`"Manual"`, `"CSV"`, `"Apple Exercise App"`). Stored as String for forward-extensibility. Read type-safely via `workout.workoutSource`. |
 | `externalID` | `String?` | `nil` | Stable identifier from the external source (e.g. `HKWorkout.uuid.uuidString`). Used for deduplication on re-import. `nil` for manual and CSV entries. |
 

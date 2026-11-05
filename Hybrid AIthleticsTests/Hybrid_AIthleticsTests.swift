@@ -7168,3 +7168,187 @@ struct FavoriteWorkoutTests {
         #expect(fetched.first?.sortOrder == 1)
     }
 }
+
+// MARK: - FavoriteFormValues Tests
+
+struct FavoriteFormValuesTests {
+
+    @Test func splitsDurationIntoWheelParts() {
+        let values = FavoriteFormValues(durationSeconds: 3725)
+        #expect(values.hours == 1)
+        #expect(values.minutes == 2)
+        #expect(values.seconds == 5)
+    }
+
+    @Test func durationSecondsCombinesWheelParts() {
+        #expect(FavoriteFormValues.durationSeconds(hours: 1, minutes: 2, seconds: 5) == 3725)
+    }
+
+    @Test func zeroOrNegativeDistanceIsNil() {
+        #expect(FavoriteFormValues(displayDistance: 0).displayDistance == nil)
+        #expect(FavoriteFormValues(displayDistance: -1).displayDistance == nil)
+        #expect(FavoriteFormValues(displayDistance: nil).distanceMiles(metric: false) == 0)
+    }
+
+    @Test func readsFavoriteInImperialUnits() {
+        let favorite = FavoriteWorkout(
+            name: "Loop", type: .easyRun, distanceMiles: 5, durationSeconds: 2700, countsTowardMileage: false
+        )
+        let values = FavoriteFormValues(favorite, metric: false)
+        #expect(values.name == "Loop")
+        #expect(values.type == .easyRun)
+        #expect(values.displayDistance == 5)
+        #expect(values.durationSeconds == 2700)
+        #expect(!values.countsTowardMileage)
+    }
+
+    @Test func readsFavoriteInMetricUnitsAndRoundTrips() throws {
+        let favorite = FavoriteWorkout(name: "Loop", distanceMiles: 5)
+        let values = FavoriteFormValues(favorite, metric: true)
+        let km = try #require(values.displayDistance)
+        #expect(abs(km - 8.0467) < 0.001)
+        #expect(abs(values.distanceMiles(metric: true) - 5) < 0.0001)
+    }
+
+    @Test func favoriteWithoutDistanceReadsAsNil() {
+        let values = FavoriteFormValues(FavoriteWorkout(name: "Swim", type: .swim), metric: false)
+        #expect(values.displayDistance == nil)
+    }
+
+    @Test func plannedFirstPrefersPlannedTargets() {
+        let values = FavoriteFormValues.plannedFirst(
+            name: "Tempo", type: .tempoRun,
+            plannedDurationSeconds: 2400, plannedDisplayDistance: 5,
+            actualDurationSeconds: 2500, actualDisplayDistance: 5.2,
+            countsTowardMileage: true
+        )
+        #expect(values.durationSeconds == 2400)
+        #expect(values.displayDistance == 5)
+        #expect(values.name == "Tempo")
+        #expect(values.type == .tempoRun)
+    }
+
+    @Test func plannedFirstFallsBackToActualsPerField() {
+        let values = FavoriteFormValues.plannedFirst(
+            name: "Ride", type: .bike,
+            plannedDurationSeconds: 0, plannedDisplayDistance: 20,
+            actualDurationSeconds: 3600, actualDisplayDistance: 21,
+            countsTowardMileage: false
+        )
+        #expect(values.durationSeconds == 3600)
+        #expect(values.displayDistance == 20)
+        #expect(!values.countsTowardMileage)
+
+        let noPlannedDistance = FavoriteFormValues.plannedFirst(
+            name: "Ride", type: .bike,
+            plannedDurationSeconds: 3000, plannedDisplayDistance: nil,
+            actualDurationSeconds: 3600, actualDisplayDistance: 21,
+            countsTowardMileage: true
+        )
+        #expect(noPlannedDistance.durationSeconds == 3000)
+        #expect(noPlannedDistance.displayDistance == 21)
+    }
+}
+
+// MARK: - FavoriteWorkoutEditor Tests
+
+struct FavoriteWorkoutEditorTests {
+
+    @Test func makeTrimsNameConvertsUnitsAndSaves() throws {
+        let container = ModelContainerFactory.makePreviewContainer()
+        let context = ModelContext(container)
+        let values = FavoriteFormValues(
+            name: "  Track 6x800  ", type: .intervalRun, durationSeconds: 3000,
+            displayDistance: 8.0467, countsTowardMileage: true
+        )
+        let favorite = try #require(try FavoriteWorkoutEditor.make(from: values, metric: true, in: context))
+        #expect(favorite.name == "Track 6x800")
+        #expect(favorite.type == .intervalRun)
+        #expect(abs(favorite.distanceMiles - 5) < 0.001)
+        #expect(favorite.durationSeconds == 3000)
+
+        let fetched = try context.fetch(FetchDescriptor<FavoriteWorkout>())
+        #expect(fetched.count == 1)
+    }
+
+    @Test func makeRejectsBlankName() throws {
+        let container = ModelContainerFactory.makePreviewContainer()
+        let context = ModelContext(container)
+        let favorite = try FavoriteWorkoutEditor.make(
+            from: FavoriteFormValues(name: "  \n "), metric: false, in: context
+        )
+        #expect(favorite == nil)
+        #expect(try context.fetch(FetchDescriptor<FavoriteWorkout>()).isEmpty)
+    }
+
+    @Test func makeAppendsAfterHighestSortOrder() throws {
+        let container = ModelContainerFactory.makePreviewContainer()
+        let context = ModelContext(container)
+        let first = try #require(try FavoriteWorkoutEditor.make(
+            from: FavoriteFormValues(name: "A"), metric: false, in: context
+        ))
+        context.insert(FavoriteWorkout(name: "Gap", sortOrder: 7))
+        let last = try #require(try FavoriteWorkoutEditor.make(
+            from: FavoriteFormValues(name: "B"), metric: false, in: context
+        ))
+        #expect(first.sortOrder == 0)
+        #expect(last.sortOrder == 8)
+    }
+
+    @Test func updateOverwritesFields() {
+        let favorite = FavoriteWorkout(name: "Old", type: .run, distanceMiles: 3, durationSeconds: 1500)
+        let updated = FavoriteWorkoutEditor.update(
+            favorite,
+            with: FavoriteFormValues(
+                name: " New ", type: .hike, durationSeconds: 5400,
+                displayDistance: nil, countsTowardMileage: false
+            ),
+            metric: false
+        )
+        #expect(updated)
+        #expect(favorite.name == "New")
+        #expect(favorite.type == .hike)
+        #expect(favorite.distanceMiles == 0)
+        #expect(favorite.durationSeconds == 5400)
+        #expect(!favorite.countsTowardMileage)
+    }
+
+    @Test func updateRejectsBlankNameAndLeavesFavoriteUntouched() {
+        let favorite = FavoriteWorkout(name: "Keep", distanceMiles: 3)
+        let updated = FavoriteWorkoutEditor.update(
+            favorite, with: FavoriteFormValues(name: " ", displayDistance: 9), metric: false
+        )
+        #expect(!updated)
+        #expect(favorite.name == "Keep")
+        #expect(favorite.distanceMiles == 3)
+    }
+
+    @Test func deleteRemovesOnlyThatFavorite() throws {
+        let container = ModelContainerFactory.makePreviewContainer()
+        let context = ModelContext(container)
+        let keep = FavoriteWorkout(name: "Keep")
+        let remove = FavoriteWorkout(name: "Remove")
+        context.insert(keep)
+        context.insert(remove)
+        try context.save()
+
+        try FavoriteWorkoutEditor.delete(remove, in: context)
+
+        let fetched = try context.fetch(FetchDescriptor<FavoriteWorkout>())
+        #expect(fetched.map(\.name) == ["Keep"])
+    }
+
+    @Test func moveRenumbersSortOrderToNewPositions() {
+        let a = FavoriteWorkout(name: "A", sortOrder: 0)
+        let b = FavoriteWorkout(name: "B", sortOrder: 4)
+        let c = FavoriteWorkout(name: "C", sortOrder: 4)
+        FavoriteWorkoutEditor.move([a, b, c], fromOffsets: IndexSet(integer: 2), toOffset: 0)
+        #expect(c.sortOrder == 0)
+        #expect(a.sortOrder == 1)
+        #expect(b.sortOrder == 2)
+    }
+
+    @Test func moveWithEmptyListIsNoOp() {
+        FavoriteWorkoutEditor.move([], fromOffsets: IndexSet(), toOffset: 0)
+    }
+}

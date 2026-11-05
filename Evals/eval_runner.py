@@ -26,6 +26,9 @@ from dataclasses import dataclass
 # Configuration
 # ---------------------------------------------------------------------------
 
+# Deliberately still Gemma 3 4B: production runs Gemma 4 E2B
+# (lmstudio-community/gemma-4-E2B-it-MLX-4bit), so scores do not reflect the
+# shipping model. Keep in step with CoachGenerator.modelID.
 MODEL_ID = "mlx-community/gemma-3-4b-it-qat-4bit"
 
 SCENARIOS = ["high-rpe", "balanced", "empty", "single-hard", "mixed"]

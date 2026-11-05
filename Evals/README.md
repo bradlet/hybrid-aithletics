@@ -1,6 +1,12 @@
 # AI Coach Evals
 
-CLI tool for evaluating and iterating on the AI Coach's prompt design and generation parameters outside the iOS app. Runs the same Gemma 3 4B model with the same `AICoachCore` library used in production.
+CLI tool for evaluating and iterating on the AI Coach's prompt design and generation parameters outside the iOS app. It uses the same `AICoachCore` library as production, so prompts and generation config are identical.
+
+> **Limitations, read before trusting a score**
+> - **Model mismatch:** evals still run **Gemma 3 4B QAT** (`mlx-community/gemma-3-4b-it-qat-4bit`). Production runs **Gemma 4 E2B** (`lmstudio-community/gemma-4-E2B-it-MLX-4bit`), so scores no longer reflect the shipping model.
+> - **One-shot only:** the scored scenarios exercise the legacy one-shot prompt (`systemPreamble` + bullet-list answer). The app's tool-calling conversation is not scored. Use `inspect --prompt-mode conversation` to review it, and verify tool behavior on a device.
+>
+> See [`docs/AI_COACH.md`](../docs/AI_COACH.md) for the production coach.
 
 ## Prerequisites
 
@@ -8,7 +14,7 @@ CLI tool for evaluating and iterating on the AI Coach's prompt design and genera
 - **macOS 14+**
 - **Swift 5.9+**
 - **Python 3.9+** with `mlx-lm` (`pip3 install mlx-lm`)
-- **~2 GB disk** for model weight download (first run only, cached afterward)
+- **~3 GB disk** for the Gemma 3 4B QAT weights (first run only, cached afterward)
 
 ## Quick Start
 
@@ -17,6 +23,10 @@ cd Evals
 
 # Inspect the prompt without running the model (Swift, no model needed)
 swift run CoachEval inspect --scenario high-rpe --prompt-mode chat
+
+# Inspect what the production tool-calling chat sends: system preamble with
+# today's date, first user turn with the training snapshot, and tool schemas
+swift run CoachEval inspect --scenario high-rpe --prompt-mode conversation
 
 # Run all scenarios with the Python eval runner
 python3 eval_runner.py
@@ -41,6 +51,8 @@ The eval runner uses Python MLX (`mlx-lm`) for model generation because Swift Pa
 
 Runs one or all scenarios through the model and reports quality scores.
 
+> ⚠️ `run` and `compare` generate with Swift MLX, and SPM command-line builds don't compile MLX's Metal shaders, so they produce garbage output. Use `python3 eval_runner.py` for generation. The options below mirror the Python runner's flags.
+
 ```
 swift run CoachEval run [OPTIONS]
 
@@ -55,16 +67,20 @@ Options:
 ```
 
 **Prompt modes:**
-- `flat` — current app behavior: entire prompt (system preamble + training data) stuffed into a single user message. This is the broken baseline.
-- `chat` — fixed behavior: system preamble sent as a system-role message, training data as a user-role message. This is the intended correct usage.
+- `flat` — entire one-shot prompt (system preamble + training data) in a single user message. Kept as a baseline.
+- `chat` — one-shot prompt with the system preamble as a system-role message and the training data as a user-role message.
+
+Neither is what the app sends today. The app's tool-calling conversation is available to `inspect` only, as `--prompt-mode conversation`.
 
 ### `inspect` — Print raw prompt
 
 Prints the formatted prompt for a scenario without running the model. Useful for iterating on prompt text.
 
 ```
-swift run CoachEval inspect --scenario <id> [--prompt-mode <flat|chat>]
+swift run CoachEval inspect --scenario <id> [--prompt-mode <flat|chat|conversation>]
 ```
+
+`conversation` prints the production chat: `chatSystemPreamble(today:)`, the first user turn with the scenario's training snapshot attached (the scenario's closing question stands in for the athlete's message), and `CoachToolSchemas.all(today:)` as JSON.
 
 ### `compare` — A/B test parameter configs
 
@@ -133,10 +149,11 @@ Then add it to the `all` array in `ScenarioLibrary`.
 
 ## Iterating on Prompts
 
-1. Edit the prompt in `Packages/AICoachCore/Sources/AICoachCore/AICoachPromptBuilder.swift`
-2. Preview with: `swift run CoachEval inspect --scenario high-rpe`
-3. Run eval: `swift run CoachEval run --scenario high-rpe`
-4. Changes propagate to the iOS app automatically since both use `AICoachCore`
+1. Edit the prompt in `Packages/AICoachCore/Sources/AICoachCore/AICoachPromptBuilder.swift` (or a tool description in `CoachToolSchemas.swift`)
+2. Preview with: `swift run CoachEval inspect --scenario high-rpe --prompt-mode conversation` (or `chat` for the one-shot prompt)
+3. Score one-shot changes: `python3 eval_runner.py --scenario high-rpe`
+4. Verify conversational and tool-calling changes on a physical device. They aren't scored here
+5. Changes propagate to the iOS app automatically since both use `AICoachCore`
 
 ## Iterating on Generation Parameters
 
@@ -144,16 +161,16 @@ Use command-line overrides for quick experiments:
 
 ```bash
 # Try lower temperature
-swift run CoachEval run --scenario high-rpe --temperature 0.3
+python3 eval_runner.py --scenario high-rpe --temperature 0.3
 
-# Try lower repetition penalty
-swift run CoachEval run --scenario high-rpe --repetition-penalty 1.2
+# Try a different repetition penalty
+python3 eval_runner.py --scenario high-rpe --repetition-penalty 1.1
 
 # Try tighter token budget
-swift run CoachEval run --scenario high-rpe --max-tokens 250
+python3 eval_runner.py --scenario high-rpe --max-tokens 250
 ```
 
-To lock in a new default, update `GenerationConfig.production` in `Packages/AICoachCore/Sources/AICoachCore/GenerationConfig.swift`. Both the app and eval CLI read from this single source of truth.
+To lock in a new default, update the presets in `Packages/AICoachCore/Sources/AICoachCore/GenerationConfig.swift`. The app's chat uses `GenerationConfig.chat`; the one-shot path these evals score uses `GenerationConfig.production`.
 
 ## Example Output
 
@@ -185,10 +202,11 @@ Generation stats: 28.5 tok/s, 4.98s total
 
 ```
 Evals/
-├── Package.swift              # Depends on AICoachCore, mlx-swift-examples, ArgumentParser
+├── eval_runner.py             # Python MLX generation + scoring (the working generation path)
+├── Package.swift              # Depends on AICoachCore, mlx-swift-lm 2.x, ArgumentParser
 └── Sources/CoachEval/
     ├── CoachEvalCLI.swift      # Entry point
-    ├── Commands/               # run, inspect, compare
+    ├── Commands/               # run, inspect (flat|chat|conversation), compare
     ├── Generation/             # CoachGenerator (MLX model wrapper)
     ├── Scenarios/              # EvalScenario + ScenarioLibrary
     └── Evaluation/             # QualityScorer + EvalReport

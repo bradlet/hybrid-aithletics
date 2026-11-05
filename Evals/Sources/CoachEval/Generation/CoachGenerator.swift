@@ -2,9 +2,13 @@
 //  CoachGenerator.swift
 //  CoachEval
 //
-//  Wraps MLX model loading and generation. Supports two prompt modes
-//  for A/B comparison: "flat" (current broken app behavior) and "chat"
-//  (proper system/user role separation).
+//  Wraps MLX model loading and generation for the one-shot prompt. Supports
+//  two prompt modes for A/B comparison: "flat" (everything in one user
+//  message) and "chat" (system/user role separation). The app's tool-calling
+//  conversation is not generated here — see InspectPromptCommand.
+//
+//  Note: SPM command-line builds don't compile MLX's Metal shaders, so Swift
+//  generation here produces garbage; eval_runner.py generates with Python MLX.
 //
 
 import Foundation
@@ -14,9 +18,10 @@ import MLXLMCommon
 
 /// How the prompt is formatted before being sent to the model.
 enum PromptMode: String, CaseIterable {
-    /// Current app behavior: entire prompt (system + user) in a single user message.
+    /// Entire one-shot prompt (system + user) in a single user message.
     case flat
-    /// Fixed behavior: system preamble in system role, training data in user role.
+    /// One-shot prompt with the system preamble in the system role and the
+    /// training data in the user role.
     case chat
 }
 
@@ -33,7 +38,9 @@ struct GenerationResult {
 /// Loads the Gemma model and generates coaching responses.
 final class CoachGenerator {
 
-    /// Hugging Face model ID — must match the app's MLXAICoachService.modelID.
+    /// Hugging Face model ID. Deliberately still Gemma 3 4B — it does NOT match
+    /// the app's `MLXAICoachService.modelID` (Gemma 4 E2B), so scores do not
+    /// reflect the production model. Keep in step with `eval_runner.py`.
     static let modelID = "mlx-community/gemma-3-4b-it-qat-4bit"
 
     private let configuration: ModelConfiguration

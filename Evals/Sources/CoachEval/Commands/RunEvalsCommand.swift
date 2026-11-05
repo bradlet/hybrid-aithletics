@@ -18,7 +18,7 @@ struct RunEvalsCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Run only this scenario ID (e.g. high-rpe).")
     var scenario: String?
 
-    @Option(name: .long, help: "Prompt mode: flat (current app) or chat (fixed).")
+    @Option(name: .long, help: "Prompt mode: flat (one user message) or chat (system/user roles).")
     var promptMode: String = "chat"
 
     @Option(name: .long, help: "Override temperature (e.g. 0.3).")
